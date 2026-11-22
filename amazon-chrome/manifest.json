@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Spending Atlas Amazon Connector",
+  "version": "1.0.0",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "sidePanel"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "worker.js"},
+  "action": {"default_title": "Connect Amazon Your Orders to Spending Atlas"},
+  "side_panel": {"default_path": "panel.html"}
+}

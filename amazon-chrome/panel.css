@@ -1,0 +1,6 @@
+:root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+body { margin: 1.25rem; }
+h1 { margin: 0; font-size: 1.55rem; }
+label { display: grid; gap: .25rem; margin-bottom: .75rem; }
+input, button { font: inherit; padding: .45rem; }
+button { margin: 0 .3rem .35rem 0; cursor: pointer; }

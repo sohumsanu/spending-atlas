@@ -1,0 +1,29 @@
+# Private application data and anything exported from a financial source
+.finance-data/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.csv
+*.tsv
+*.qfx
+*.ofx
+*.xlsx
+*.xls
+*.pdf
+*.zip
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local artifacts
+imports/
+backups/
+receipts/
+*.json
+!amazon-chrome/manifest.json
+*.log

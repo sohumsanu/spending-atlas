@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f7fb">
+  <title>Spending Atlas</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content-start">Skip to content</a>
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#overview"><span class="brand-mark" data-icon="atlas"></span><span>Spending Atlas</span></a>
+    <nav aria-label="Main navigation" id="site-nav">
+      <a href="#overview" data-page="overview"><span data-icon="overview"></span> Overview</a>
+      <a href="#transactions" data-page="transactions"><span data-icon="transactions"></span> Transactions</a>
+      <a href="#months" data-page="months"><span data-icon="months"></span> Months</a>
+      <a href="#categories" data-page="categories"><span data-icon="categories"></span> Categories</a>
+      <a href="#trips" data-page="trips"><span data-icon="trips"></span> Trips</a>
+      <a href="#merchants" data-page="merchants"><span data-icon="merchants"></span> Merchants</a>
+      <hr>
+      <a href="#reimbursements" data-page="reimbursements"><span data-icon="reimbursements"></span> Reimbursements</a>
+      <a href="#review" data-page="review"><span data-icon="review"></span> Review <b id="review-count" hidden></b></a>
+      <a href="#data" data-page="data"><span data-icon="data"></span> Data &amp; backup</a>
+      <a href="#setup" data-page="setup"><span data-icon="wallet"></span> Setup</a>
+    </nav>
+    <div class="local-status"><span class="local-icon" data-icon="lock"></span><div>Private workspace<small>Stored on this device</small></div></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <button id="nav-toggle" class="icon-button" type="button" aria-label="Navigation" aria-expanded="false" aria-controls="site-nav" data-icon="menu"></button>
+      <a href="#overview" class="mobile-brand" aria-label="Spending Atlas overview"><span data-icon="atlas"></span><b>Atlas</b></a>
+      <div id="breadcrumb">Your finances</div>
+      <button id="search-open" class="global-search" type="button"><span data-icon="search"></span><span class="search-label">Find anything</span><kbd>⌘ / Ctrl K</kbd></button>
+      <form id="filters" aria-label="Report filters">
+        <label>Currency <select id="currency" aria-label="Currency"></select></label>
+        <label>Year <select id="year" aria-label="Year"></select></label>
+      </form>
+    </header>
+    <span id="content-start" tabindex="-1"></span>
+    <main id="main" aria-busy="true"><p class="placeholder">Loading your ledger…</p></main>
+  </div>
+  <dialog id="modal" aria-labelledby="dialog-title"></dialog>
+  <dialog id="search-dialog" aria-labelledby="search-title">
+    <div class="search-heading"><h2 id="search-title">Find anything</h2><button type="button" class="icon-button" id="search-close" aria-label="Close search" data-icon="close"></button></div>
+    <input id="global-query" type="search" aria-label="Search your ledger" placeholder="Merchant, transaction, category or trip" autofocus>
+    <div id="global-results" aria-live="polite"></div>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spending Atlas Amazon Connector</title>
+  <link rel="stylesheet" href="panel.css">
+  <script src="collector.js" defer></script>
+  <script src="panel.js" defer></script>
+</head>
+<body>
+  <h1>Connect Amazon</h1>
+  <p>Sign in on Amazon and open Your Orders or Payments → Transactions. Connect the tab to allow sync requests from your local MCP.</p>
+  <form>
+    <label>Local pairing key <input name="key" type="password" required autocomplete="off"></label>
+    <button type="submit">Connect this tab</button>
+    <button type="button" id="disconnect" disabled>Disconnect</button>
+  </form>
+  <p id="status" role="status">Waiting for a connection.</p>
+</body>
+</html>
