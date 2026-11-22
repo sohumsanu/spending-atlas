@@ -11,6 +11,7 @@ SHARE_FILES = (
     "app.py", "ledger.py", "intelligence.py", "onboarding.py", "reference.py", "category_chat.py",
     "amazon_orders.py", "amazon_mcp.py", "costco_receipts.py", "weekly_refresh.py",
     "static/index.html", "static/style.css", "static/app.js",
+    "docs/images/chatgpt-finances.jpg", "docs/images/chatgpt-connect-account.jpg",
     "amazon-chrome/manifest.json", "amazon-chrome/collector.js", "amazon-chrome/panel.html",
     "amazon-chrome/panel.css", "amazon-chrome/panel.js", "amazon-chrome/worker.js",
 )

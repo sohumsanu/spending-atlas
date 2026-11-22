@@ -29,18 +29,26 @@ def prepare(folder, destination):
         document = json.loads(file.read_text())
         account, pages = document["account"], document["pages"]
         identifier = account["id"]
-        if identifier in accounts or not pages or any(
-            not isinstance(page.get("has_more"), bool) or page["has_more"] != (i < len(pages) - 1) or
-            (page["has_more"] and not page.get("next_cursor")) for i, page in enumerate(pages)
+        if identifier in accounts or not isinstance(pages, list) or not pages or any(
+            not isinstance(page, dict) or not isinstance(page.get("has_more"), bool) or
+            page["has_more"] != (i < len(pages) - 1) or
+            (page["has_more"] and (not isinstance(page.get("next_cursor"), str) or not page["next_cursor"]))
+            for i, page in enumerate(pages)
         ):
             raise ValueError("An account is duplicated or its pagination is incomplete.")
+        if any(not isinstance(page.get("items"), list) or any(not isinstance(row, dict) for row in page["items"])
+               for page in pages):
+            raise ValueError("A Finances page has no inline items. Fetch that account again with a smaller page size.")
+        cursors = [page["next_cursor"] for page in pages if page["has_more"]]
+        if len(set(cursors)) != len(cursors):
+            raise ValueError("A Finances pagination cursor was repeated. Fetch that account again.")
         accounts.add(identifier)
         local_id = "finances:" + identifier
         label = known[local_id]["label"] if local_id in known else account["label"]
         raw = [row for page in pages for row in page["items"]]
         dates = [iso_date(row["date"]) for row in raw]
         first, last = (min(dates), max(dates)) if dates else (None, None)
-        complete = all(page.get("coverage", {}).get("is_complete_for_query") is True for page in pages)
+        complete = all((page.get("coverage") or {}).get("is_complete_for_query") is True for page in pages)
         counts = {"matched": 0, "new": 0, "zero": 0, "pending": 0, "unresolved": []}
         additions = []
         for row, day in zip(raw, dates):
@@ -62,7 +70,7 @@ def prepare(folder, destination):
                 if (existing["account"], existing["date"], existing["currency"]) != (local_id, day, currency) or (
                     amount not in {existing["amount"], corrected.get(tx_id)}
                 ):
-                    counts["unresolved"].append({"id": key, "reason": "Posting fields disagree with the saved row."})
+                    counts["unresolved"].append({"id": key, "reason": "Source transaction fields disagree with the saved row."})
                 else:
                     counts["matched"] += 1
                 continue

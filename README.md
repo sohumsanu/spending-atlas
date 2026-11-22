@@ -4,12 +4,28 @@ One local dashboard for your bank spending, refunds, and trips. Bring your own C
 
 ```mermaid
 flowchart LR
-    A["1 · Give Codex the setup prompt"] --> B["2 · Confirm your accounts in ChatGPT Finances"]
+    A["1 · Connect your accounts in ChatGPT Finances"] --> B["2 · Give Codex the setup prompt"]
     B --> C["3 · Open your dashboard"]
     C --> D["Check missing months · Optional receipts"]
 ```
 
-## Start with Codex
+Already connected? [Skip to the Codex prompt](#2-start-with-codex).
+
+## 1. Connect your accounts in ChatGPT Finances
+
+**You’ll need** Codex signed into the same ChatGPT account, Python 3.10 or newer, and access to ChatGPT Finances. OpenAI lists Finances for eligible U.S. users on Free, Go, Plus, and Pro. [ChatGPT Finances availability and setup](https://help.openai.com/en/articles/20001222-finances-in-chatgpt)
+
+1. Open [ChatGPT Finances](https://chatgpt.com/finances) and sign in. In Finances, choose **Get started**. You can also type `@Finances, connect my accounts` in a ChatGPT conversation.
+
+   [![The signed-out ChatGPT Finances page, with a Log in button and a Get started section](docs/images/chatgpt-finances.jpg)](https://chatgpt.com/finances)
+
+2. Choose **Connect with Plaid** when prompted. Complete the bank sign-in yourself. Repeat for every institution you want included and select every relevant checking, savings, and credit card account at each institution. Include payment accounts you use for spending or reimbursements. The public page below shows the entry point and an example of synced institutions.
+
+   [![The public Finances Connect Account button next to an example list of synced institutions](docs/images/chatgpt-connect-account.jpg)](https://chatgpt.com/finances)
+
+3. Return to Finances and open **Accounts**. Compare the list with the accounts you used this year, check the last sync, and resolve anything marked **Action required**. Keep a list of any unsupported accounts or missing statement periods. Codex can use CSVs for those gaps. [OpenAI’s account-linking and sync guide](https://help.openai.com/en/articles/20001222-finances-in-chatgpt)
+
+## 2. Start with Codex
 
 Paste this into a new Codex chat:
 
@@ -21,7 +37,7 @@ setup and checks in the background. Ask me only for account decisions or
 sign-ins that need my input. Give me the link when it is ready.
 ```
 
-**Have handy** · Codex, Python 3.10 or newer, and access to your own ChatGPT Finances account. If Finances is unavailable or an account has missing history, Codex can help import a bank CSV. Amazon and Costco are optional.
+Use a regular local Codex chat with access to your checkout. If the Finances tool is unavailable in that chat, Codex can still start the dashboard and help import CSVs. Amazon and Costco are optional.
 
 | In the dashboard | What you can do |
 | --- | --- |

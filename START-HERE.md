@@ -1,6 +1,6 @@
 # Get started with Spending Atlas
 
-For the shortest path, use the [Codex setup prompt](README.md#start-with-codex). The instructions below are for manual setup.
+For the shortest path, use the [Codex setup prompt](README.md#2-start-with-codex). The instructions below are for manual setup.
 
 1. Unzip the starter into a private folder on your computer. Open **Start Spending Atlas.command** on macOS or **Start Spending Atlas.bat** on Windows. Leave the launcher window open while using the dashboard.
 2. Pick **ChatGPT Finances** or **Import a CSV**. Start with one bank or card. Bring other sources in when you’re ready.

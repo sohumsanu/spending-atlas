@@ -79,7 +79,7 @@ def main():
         return
     port = running_instance() or start(8765) or start(0)
     if port is None:
-        parser.exit(1, "Could not start the dashboard. Check the newest log in .finance-data.\n")
+        parser.exit(1, f"Could not start the dashboard. Check the newest server log in {DATA}.\n")
     url = f"http://127.0.0.1:{port}/"
     print(url)
     if args.open:
