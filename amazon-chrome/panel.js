@@ -5,9 +5,9 @@ const status = document.querySelector("#status");
 const disconnect = document.querySelector("#disconnect");
 let session;
 
-async function bridge(key, data) {
-  const response = await fetch("http://127.0.0.1:8765/api/amazon/bridge", {
-    method: "POST", headers: {"Content-Type": "application/json", Authorization: "Bearer " + key},
+async function bridge(active, data) {
+  const response = await fetch(`http://127.0.0.1:${active.port}/api/amazon/bridge`, {
+    method: "POST", headers: {"Content-Type": "application/json", Authorization: "Bearer " + active.key},
     body: JSON.stringify(data), signal: AbortSignal.timeout(9000),
   });
   const result = await response.json();
@@ -21,7 +21,7 @@ async function sync(active, job) {
   const result = response?.result;
   if (!result) throw Error("The Amazon tab is unavailable. Sign in and reopen the requested page.");
   if (active !== session) return;
-  const saved = await bridge(active.key, {action: "finish", mode: active.mode, job,
+  const saved = await bridge(active, {action: "finish", mode: active.mode, job,
     rows: result.orders || result.rows, complete: result.complete});
   const count = saved.received ?? saved.payments_seen ?? 0;
   status.textContent = count + (active.mode === "orders" ? " orders staged." : " completed charges read.") +
@@ -32,14 +32,14 @@ async function poll(active) {
   if (session !== active) return;
   let job;
   try {
-    ({job} = await bridge(active.key, {action: "poll", mode: active.mode}));
+    ({job} = await bridge(active, {action: "poll", mode: active.mode}));
     if (job && session === active) {
       status.textContent = "Reading Amazon through this signed-in tab…";
       await sync(active, job);
     }
   } catch (error) {
     if (job && session === active) {
-      try { await bridge(active.key, {action: "finish", mode: active.mode, job, rows: [], complete: false}); } catch (_) {}
+      try { await bridge(active, {action: "finish", mode: active.mode, job, rows: [], complete: false}); } catch (_) {}
     }
     if (session === active) {
       status.textContent = error.message;
@@ -54,7 +54,13 @@ async function poll(active) {
 form.addEventListener("submit", async event => {
   event.preventDefault();
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
-  const key = new FormData(form).get("key").trim();
+  const fields = new FormData(form);
+  const key = fields.get("key").trim();
+  const port = Number(fields.get("port"));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    status.textContent = "Enter the port shown in your local dashboard address.";
+    return;
+  }
   const url = tab?.url && new URL(tab.url);
   const mode = url?.origin === "https://www.amazon.com" ?
     ["/your-orders/orders", "/gp/your-account/order-history"].includes(url.pathname) ? "orders" :
@@ -63,7 +69,7 @@ form.addEventListener("submit", async event => {
     status.textContent = "Open Amazon Your Orders or Payments → Transactions and click the extension there.";
     return;
   }
-  session = {tab: tab.id, key, mode};
+  session = {tab: tab.id, port, key, mode};
   disconnect.disabled = false;
   status.textContent = "Connected. Run sync_amazon_" + mode + " in your MCP client.";
   await poll(session);

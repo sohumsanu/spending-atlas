@@ -42,8 +42,16 @@ Use a regular local Codex chat with access to your checkout. If the Finances too
 | In the dashboard | What you can do |
 | --- | --- |
 | **Overview** | See yearly and monthly net spending and what drove it. |
-| **Setup → Check coverage** | Compare verified periods against the year and get a Codex prompt for gaps. |
+| **Setup → Check coverage** | Confirm the account list, see unverified dates, and get a Codex prompt for those gaps. |
 | **Categories & trips** | Recategorize a purchase, link a refund, or ask Codex to make an edit. |
+
+### Optional retailer receipts
+
+Open **Setup → Optional receipts**. Turn on Amazon or Costco, use its sign-in link, then copy its Codex prompt. Sign in yourself on the retailer site. Amazon needs the cards you used and its completed payments to separate your purchases on a shared account. Costco warehouse receipts are under **Orders & Returns → In-Warehouse**. Suggestions for other retailers come from repeat shopping and grocery purchases in your ledger. You choose which merchant to investigate. [Costco receipt guide](https://customerservice.costco.com/app/answers/detail/a_id/10306)
+
+### If the year has gaps
+
+Overview flags when the selected year still needs review. **See coverage gaps** shows the unverified dates by bank or card. **Get Codex help** builds a prompt with masked account labels and exact ranges so Codex can check Finances and ask for only the missing statements. The current year is checked through today and past years through December 31. A gap means there is no coverage evidence yet. You can finish setup and come back to it.
 
 **Your data stays in your local ledger.** The public repo contains the app and setup instructions. Keep statements, exported transactions, receipts, and backups in the ignored `.finance-data/` folder. Codex and connected services process the data used for requests you authorize.
 

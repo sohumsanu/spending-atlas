@@ -257,7 +257,7 @@ function overview() {
   const ytd = year === String(new Date().getFullYear());
   const latest = reporting.map(row => row.date).sort().at(-1);
   return heading("Spending overview", latest ? `Posted activity through ${labelDate(latest)}` : "No activity in this period", '<a class="btn" href="#transactions">Browse transactions</a>', `${year} ${ytd ? "year to date" : "calendar year"}`) +
-    metrics(purchases) +
+    coverageNotice(year) + metrics(purchases) +
     `<div class="overview-grid overview-report">${panel("Spending over time", monthlyChart(monthlyTotals(purchases)), "Select a month to see its transactions.", chartControl())}
     ${panel("Where it went", categoryMix(purchases), "Share of categories with positive net spending", '<a class="quiet-link" href="#categories">All categories</a>')}</div>
     <details class="panel gross-detail"><summary>How gross outflows add up</summary><div class="list-row"><span>All posted debits</span><strong class="numeric">${fmt(postedDebits)}</strong></div>
@@ -804,18 +804,58 @@ function coverageReport(year) {
   return {rows, start, end, confirmed, complete: confirmed && !!rows.length && rows.every(row => !row.gaps.length)};
 }
 
-function setupPrompt(mode) {
+function coverageNotice(year) {
+  const report = coverageReport(year);
+  if (report.complete) return "";
+  const gaps = report.rows.filter(row => row.gaps.length).length;
+  const message = [
+    !report.confirmed && "Confirm the accounts you used.",
+    gaps && `${gaps} account${gaps === 1 ? " has" : "s have"} unverified dates.`,
+    !report.rows.length && "Add an account to start checking dates.",
+  ].filter(Boolean).join(" ");
+  return `<section class="coverage-notice" aria-labelledby="coverage-notice-title">
+    <div><h2 id="coverage-notice-title">${year} coverage needs review</h2>
+    <p>${message} Totals reflect the records imported so far.</p></div>
+    <div class="inline"><a class="btn small" href="#setup/coverage/${year}">See coverage gaps</a>
+    ${button("Get Codex help", "setup-prompt", JSON.stringify({mode:"setup-bank", year}), "small")}</div></section>`;
+}
+
+const safeAccountLabel = label => label.replace(/\d(?:[ -]?\d){4,}/g, value => "••" + value.replace(/\D/g, "").slice(-4));
+
+function suggestedRetailers(year) {
+  const groups = new Map();
+  for (const row of state.data.transactions) {
+    const label = row.merchant?.trim();
+    if (row.kind !== "purchase" || row.amount <= 0 || row.currency !== state.currency || !row.date.startsWith(year) ||
+        !["shopping", "groceries"].includes(row.category) || !label || label.length > 80) continue;
+    const key = merchantKey(row);
+    if (["amazon", "costco", "paypal", "venmo", "unknown", "card transaction"].includes(key)) continue;
+    const group = groups.get(key) || {name: safeAccountLabel(label), count: 0, amount: 0};
+    group.count++;
+    group.amount += row.amount;
+    groups.set(key, group);
+  }
+  return [...groups.values()].filter(group => group.count >= 2)
+    .sort((a, b) => b.amount - a.amount || b.count - a.count).slice(0, 3);
+}
+
+function setupPrompt(mode, requestedYear, retailer) {
   const s = state.data.setup;
-  const year = setupYear || s.today.slice(0, 4);
+  const year = requestedYear || setupYear || state.year || s.today.slice(0, 4);
   const report = coverageReport(year);
   const local = "Work in my local Spending Atlas folder and read CODEX_SETUP.md. Keep all raw records and backups in .finance-data. Ask only for masked account labels. Keep credentials, cookies, and bank logins out of chat.";
   const gaps = report.rows.filter(row => row.gaps.length).map(row => "- " +
-    row.label.replace(/(?:\d[ -]?){5,}/g, digits => "••" + digits.replace(/\D/g, "").slice(-4)) + " · " +
+    safeAccountLabel(row.label) + " · " +
     row.gaps.map(range => range.join(" through ")).join(", "));
   if (mode === "setup-customize") return local + "\n\nWalk me through one decision at a time. Help me set my home city, choose which ambiguous peer payments should get a dining default, tune merchant categories and shopping subcategories, review internal transfers, link refunds and reimbursements, and name trips. Ask what I want first. Use the existing dashboard controls, saved rules, and Ask Codex on category pages. For anything requiring a code change, explain the effect, preserve the original bank records, make a private SQLite backup first, and verify the totals after edits.";
   if (mode === "setup-retail") {
-    const selected = [s.amazon && "Amazon Orders and completed Payments (verify against cards selected in Setup by amount, date and last four)", s.costco && "Costco receipts (match to owned posted charges by date and amount)"].filter(Boolean);
-    return local + "\n\nHelp me add only these optional sources: " + selected.join("; ") + ". Use the signed-in Chrome session if available. Never add a new spending transaction from a receipt or a shared order. Preview the matches, keep ambiguous orders unresolved, and verify any import before publishing. If a login is needed, I will sign in directly in the browser. Continue using bank data regardless.";
+    const common = ` Help me find receipts for ${year}, using my signed-in browser or local exports with my permission. Pause for me to complete sign-in, security checks, or authorization myself. Store only the relevant receipts and match report locally. Match to existing posted purchases using date, currency, amount and account evidence. Leave ambiguous matches unresolved. Keep bank spending unchanged and verify that no receipt creates a new debit.`;
+    const sources = {
+      Amazon: `Use Amazon Your Orders and Your Payments → Transactions. Use my completed charges and the cards I selected in Setup to separate my purchases from other people’s orders. Use the bundled connector only if I choose to pair it. See START-HERE.md. My local dashboard is at ${location.origin}.`,
+      Costco: "Use Costco Orders & Purchases for online orders and the In-Warehouse tab for warehouse receipts. Follow START-HERE.md and preview the receipt index before applying it.",
+    };
+    const source = Object.hasOwn(sources, retailer) ? sources[retailer] : `Help me identify the official order-history or receipt-export page for this optional retailer: ${JSON.stringify(retailer)}. Ask me to confirm the retailer and accounts before reading. Use the retailer’s normal browser or export flows. If Spending Atlas has no receipt importer for this store, keep a local reconciliation report with the matched ledger rows and flag any missing evidence.`;
+    return local + "\n\n" + source + common;
   }
   const scope = "Audit " + year + " from " + report.start + " through " + report.end + ".";
   return local + "\n\n" + scope + " Enumerate all bank, credit card, and payment accounts with me. Use my own ChatGPT Finances connection when available, including posted inflows, outflows, and transfers. Fetch every page and handle pending separately. Follow the Finances import instructions in START-HERE.md. Use authorized bank statements for missing history. Ask me to sign in directly if needed or give me exact download dates. Reconcile overlapping rows one to one before importing and reuse stable account identities. Reserve verified coverage for periods with source evidence, including empty statements, and show gaps and unlisted accounts. Verify gross less applied credits equals net and preserve any manual edits." +
@@ -827,7 +867,7 @@ function setupPage(key) {
   const active = steps.some(([id]) => id === key) ? key : "start";
   const step = steps.findIndex(([id]) => id === active);
   const setup = state.data.setup;
-  const year = setupYear || setup.today.slice(0, 4);
+  const year = setupYear || state.year || setup.today.slice(0, 4);
   const report = coverageReport(year);
   const progress = `<nav class="setup-steps" aria-label="Setup steps">${steps.map(([id, label], i) =>
     `<a href="#setup/${id}"${i === step ? ' aria-current="step"' : ""}><span>${i + 1}</span>${label}</a>`).join("")}</nav>`;
@@ -862,11 +902,25 @@ function setupPage(key) {
       ${setup.amazon_cards.map(row => `<p>${esc(currentAccountMap.get(row.account)?.label)} · ••${esc(row.last_four)}
       ${button("Remove card", "setup-remove-card", row.account, "small")}</p>`).join("")}
       ${button("Add a card for Amazon", "setup-card", "", "small")}</div>` : "";
-    body = panel("Add receipts if you want them", `<fieldset class="setup-checks"><legend class="sr-only">Retailer sources</legend>
-      <label class="check"><input type="checkbox" data-setup-preference="amazon"${setup.amazon ? " checked" : ""}> Amazon orders and payments</label>
-      <label class="check"><input type="checkbox" data-setup-preference="costco"${setup.costco ? " checked" : ""}> Costco receipts</label></fieldset>
-      ${cards}${setup.amazon || setup.costco ? button("Get the Codex receipts prompt", "setup-prompt", "setup-retail", "primary") : ""}`,
-      "Both are optional. Continue with bank data and add receipts later.");
+    const prompt = retailer => JSON.stringify({mode:"setup-retail", year, retailer});
+    const retailerLink = (url, label) => `<a class="btn small" href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    const suggested = suggestedRetailers(year).map(({name,count,amount}) => `<div class="receipt-suggestion">
+      <div><strong>${esc(name)}</strong><small>${count} purchases · ${fmt(amount)} gross</small></div>
+      ${button("Ask Codex", "setup-prompt", prompt(name), "small")}</div>`).join("");
+    body = panel("Add receipts if you want them", `<div class="setup-options">
+      <article><h3>Amazon</h3><p class="section-note">Sign in on Amazon. Select the cards you used to match orders from a shared account.</p>
+        <label class="check"><input type="checkbox" data-setup-preference="amazon"${setup.amazon ? " checked" : ""}> Add Amazon receipts</label>
+        ${setup.amazon ? `<div class="inline">${retailerLink("https://www.amazon.com/your-orders/orders", "Open Your Orders")}
+        ${retailerLink("https://www.amazon.com/cpe/yourpayments/transactions", "Open Payments")}
+        ${button("Get Amazon Codex prompt", "setup-prompt", prompt("Amazon"), "primary small")}</div>${cards}` : ""}</article>
+      <article><h3>Costco</h3><p class="section-note">Sign in on Costco, then open Orders &amp; Returns. For warehouse receipts, use In-Warehouse.</p>
+        <label class="check"><input type="checkbox" data-setup-preference="costco"${setup.costco ? " checked" : ""}> Add Costco receipts</label>
+        ${setup.costco ? `<div class="inline">${retailerLink("https://www.costco.com/", "Open Costco")}
+        ${retailerLink("https://customerservice.costco.com/app/answers/detail/a_id/10306", "Receipt help")}
+        ${button("Get Costco Codex prompt", "setup-prompt", prompt("Costco"), "primary small")}</div>` : ""}</article></div>
+      <div class="receipt-suggestions"><h3>Another retailer</h3><p class="section-note">${suggested ? `Would you like receipts from these repeat merchants in your ${year} shopping or grocery spending?` : "You can ask Codex to help with another store."}</p>
+      ${suggested}${button("Choose another retailer", "setup-other-retailer", String(year), "small")}</div>`,
+      "Sign in directly on the retailer’s website. Then copy the prompt into Codex. You can skip receipts and continue with bank data.");
   } else {
     body = panel("Choose how your dashboard works", `<div class="setup-options"><article><h3>Local preferences</h3>
       <p class="section-note">Set your home city for trips, specify your own transfer names, and decide how ambiguous peer payments are handled.</p>
@@ -879,12 +933,15 @@ function setupPage(key) {
   const next = step < steps.length - 1 ? `<a class="btn primary" href="#setup/${steps[step + 1][0]}">Continue to ${steps[step + 1][1].toLowerCase()}</a>` :
     button("Finish and open overview", "setup-finish", "", "primary");
   return heading("Set up Spending Atlas", "Add your transactions and check what’s missing. Everything is saved as you go.", "", "YOUR PRIVATE DASHBOARD") +
-    `<div class="setup-flow">${progress}${body}<div class="setup-footer">${previous}${next}</div></div>`;
+    `<div class="setup-flow">${progress}${body}
+    ${active === "personalize" && !report.complete ? `<p class="section-note">Coverage still needs review. You can finish setup now and <a class="text-button" href="#setup/coverage/${year}">check the missing dates</a> later.</p>` : ""}
+    <div class="setup-footer">${previous}${next}</div></div>`;
 }
 
 function render() {
   if (!state.data) return;
-  let [page, key] = route();
+  let [page, key, auditYear] = route();
+  if (page === "setup" && key === "coverage" && /^\d{4}$/.test(auditYear || "") && auditYear >= "1900" && auditYear <= state.data.setup.today.slice(0, 4)) setupYear = auditYear;
   if (!Object.hasOwn(names, page)) page = "overview";
   document.querySelectorAll("#site-nav [data-page]").forEach(link => {
     if (link.dataset.page === page) link.setAttribute("aria-current", "page");
@@ -1203,12 +1260,8 @@ async function saveSetup(data) {
   await refresh();
 }
 
-function setupAction(action, value) {
-  const setup = state.data.setup;
-  const year = setupYear || setup.today.slice(0, 4);
-  if (action === "setup-prompt") {
-    const prompt = setupPrompt(value);
-    openDialog("Continue in Codex", `<p class="section-note">Open this Spending Atlas folder in Codex. Paste the prompt below into a new chat.</p>
+function showSetupPrompt(prompt) {
+  openDialog("Continue in Codex", `<p class="section-note">Open this Spending Atlas folder in Codex. Paste the prompt below into a new chat.</p>
       <label>Codex prompt<textarea rows="10" readonly>${esc(prompt)}</textarea></label>`, async () => {
       try {
         await navigator.clipboard.writeText(prompt);
@@ -1218,6 +1271,21 @@ function setupAction(action, value) {
       }
       toast("Prompt copied.");
     }, "Copy prompt");
+}
+
+function setupAction(action, value) {
+  const setup = state.data.setup;
+  const year = setupYear || state.year || setup.today.slice(0, 4);
+  if (action === "setup-other-retailer") {
+    openDialog("Pick a retailer", '<div class="fields"><label>Retailer name<input name="retailer" maxlength="80" required></label></div>', form => {
+      const retailer = form.get("retailer").trim();
+      if (!retailer) throw Error("Enter a retailer name.");
+      modal.close();
+      setTimeout(() => showSetupPrompt(setupPrompt("setup-retail", value, safeAccountLabel(retailer))), 0);
+    }, "Get Codex prompt");
+  } else if (action === "setup-prompt") {
+    const {mode, year, retailer} = value.startsWith("{") ? JSON.parse(value) : {mode:value};
+    showSetupPrompt(setupPrompt(mode, year, retailer));
   } else if (action === "setup-finances") {
     openDialog("Import a Finances snapshot", '<div class="fields"><label>Prepared JSON snapshot<input name="snapshot" type="file" accept=".json,application/json" required></label></div>',
       async form => {
@@ -1284,10 +1352,11 @@ main.addEventListener("change", async event => {
     if (control.id === "setup-year") {
       if (!control.reportValidity()) return;
       setupYear = control.value;
+      history.replaceState(null, "", "#setup/coverage/" + setupYear);
       render();
       $("#setup-year").focus();
     } else if (control.id === "setup-inventory") {
-      await saveSetup({action: "inventory", year: setupYear || state.data.setup.today.slice(0, 4), complete: control.checked});
+      await saveSetup({action: "inventory", year: setupYear || state.year || state.data.setup.today.slice(0, 4), complete: control.checked});
       $("#setup-inventory")?.focus();
     } else {
       await saveSetup({action: "preferences", [pref]: control.checked});

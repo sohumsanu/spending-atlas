@@ -417,7 +417,12 @@ dialog::backdrop { background: #25203983; }
 .setup-coverage-tools, .setup-footer { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; }
 .setup-coverage-tools input { width: 7rem; }
 .setup-coverage-tools { margin-bottom: .8rem; }
-.setup-checks { display: grid; gap: .65rem; border: 0; padding: 0; margin: 0 0 .85rem; }
+.coverage-notice { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .65rem; margin-bottom: 1rem; padding: .8rem 1rem; border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--paper); }
+.coverage-notice h2 { font-size: 1rem; }
+.coverage-notice p, .receipt-suggestion small { font-size: .85rem; color: var(--muted); }
+.receipt-suggestions { margin-top: 1rem; }
+.receipt-suggestion { display: flex; justify-content: space-between; gap: .65rem; flex-wrap: wrap; align-items: center; padding: .65rem 0; border-top: 1px solid var(--border); }
+.receipt-suggestion small { display: block; }
 .setup-footer { justify-content: space-between; align-items: center; }
 @media (max-width: 650px) {
   .setup-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }

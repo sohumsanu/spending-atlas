@@ -12,6 +12,7 @@
   <h1>Connect Amazon</h1>
   <p>Sign in on Amazon and open Your Orders or Payments → Transactions. Connect the tab to allow sync requests from your local MCP.</p>
   <form>
+    <label>Dashboard port <input name="port" type="number" min="1" max="65535" value="8765" required></label>
     <label>Local pairing key <input name="key" type="password" required autocomplete="off"></label>
     <button type="submit">Connect this tab</button>
     <button type="button" id="disconnect" disabled>Disconnect</button>
