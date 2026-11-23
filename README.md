@@ -1,19 +1,40 @@
 # Spending Atlas
 
-One local dashboard for your bank spending, refunds, and trips. Bring your own ChatGPT Finances accounts and see what’s missing before relying on yearly totals.
+A local dashboard for spending, refunds and reimbursements, and trips. Import transaction CSVs from your banks or bring in accounts through ChatGPT Finances.
 
-```mermaid
-flowchart LR
-    A["1 · Connect your accounts in ChatGPT Finances"] --> B["2 · Give Codex the setup prompt"]
-    B --> C["3 · Open your dashboard"]
-    C --> D["Check missing months · Optional receipts"]
+## Start with Codex
+
+Paste this into a local Codex chat.
+
+```text
+Set up Spending Atlas for me from https://github.com/sohumsanu/spending-atlas.
+Clone it locally, read CODEX_SETUP.md, and launch the dashboard. Ask me
+whether I want to import bank CSVs or use ChatGPT Finances. Keep my data
+local. Give me the dashboard link once you verify it opens.
 ```
 
-Already connected? [Skip to the Codex prompt](#2-start-with-codex).
+### Start from a terminal
 
-## 1. Connect your accounts in ChatGPT Finances
+You’ll need Git and Python 3.10 or newer. The dashboard has no Python package dependencies.
 
-**You’ll need** Codex signed into the same ChatGPT account, Python 3.10 or newer, and access to ChatGPT Finances. OpenAI lists Finances for eligible U.S. users on Free, Go, Plus, and Pro. [ChatGPT Finances availability and setup](https://help.openai.com/en/articles/20001222-finances-in-chatgpt)
+```sh
+git clone https://github.com/sohumsanu/spending-atlas.git
+cd spending-atlas
+python3 bootstrap.py --open
+```
+
+On Windows use `py -3 bootstrap.py --open`. Open the local URL printed by the launcher if the browser does not open automatically.
+
+## Add your transactions
+
+In **Setup**, choose the source you want.
+
+- **Use files from your bank** works without a ChatGPT Finances connection. Sign in to your bank in your browser and download one account’s transaction CSV. In Spending Atlas, choose the account nickname, review the column mapping and preview, then import. Repeat with the same nickname for later downloads. Setup shows how to find exports at Citi, Bank of America, and Capital One.
+- **Use ChatGPT Finances** uses your existing connection in Codex. If you still need to link accounts, follow the screenshots below.
+
+### Connect your accounts in ChatGPT Finances
+
+**You’ll need** Access to ChatGPT Finances and Codex signed into the same ChatGPT account. OpenAI lists Finances for eligible U.S. users on Free, Go, Plus, and Pro. [ChatGPT Finances availability and setup](https://help.openai.com/en/articles/20001222-finances-in-chatgpt)
 
 1. Open [ChatGPT Finances](https://chatgpt.com/finances) and sign in. In Finances, choose **Get started**. You can also type `@Finances, connect my accounts` in a ChatGPT conversation.
 
@@ -24,20 +45,6 @@ Already connected? [Skip to the Codex prompt](#2-start-with-codex).
    [![The public Finances Connect Account button next to an example list of synced institutions](docs/images/chatgpt-connect-account.jpg)](https://chatgpt.com/finances)
 
 3. Return to Finances and open **Accounts**. Compare the list with the accounts you used this year, check the last sync, and resolve anything marked **Action required**. Keep a list of any unsupported accounts or missing statement periods. Codex can use CSVs for those gaps. [OpenAI’s account-linking and sync guide](https://help.openai.com/en/articles/20001222-finances-in-chatgpt)
-
-## 2. Start with Codex
-
-Paste this into a new Codex chat:
-
-```text
-Set up Spending Atlas for me from https://github.com/sohumsanu/spending-atlas.
-Clone it into a new local folder, read CODEX_SETUP.md, and follow it through
-to a working dashboard. Use my own ChatGPT Finances connection. Do the local
-setup and checks in the background. Ask me only for account decisions or
-sign-ins that need my input. Give me the link when it is ready.
-```
-
-Use a regular local Codex chat with access to your checkout. If the Finances tool is unavailable in that chat, Codex can still start the dashboard and help import CSVs. Amazon and Costco are optional.
 
 | In the dashboard | What you can do |
 | --- | --- |

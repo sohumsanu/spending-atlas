@@ -10,6 +10,7 @@ let toastTimer;
 let currentAccountMap = new Map();
 let currentRowMap = new Map();
 let currentCategoryContext = null;
+let dashboardChatContext = null;
 let setupYear = "";
 const categoryChats = new Map();
 const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[ch]);
@@ -23,13 +24,17 @@ const route = () => {
 const sum = (rows, prop) => rows.reduce((total, row) => total + row[prop], 0);
 const net = row => row.amount - row.offset;
 const merchant = row => row.merchant || row.description;
+const normalizeMerchant = name => name.normalize("NFC").toLowerCase().trim().replace(/\s+/g, " ");
 const merchantKey = row => {
-  const label = merchant(row).toLowerCase().trim();
+  if (row.assigned_merchant) return normalizeMerchant(row.assigned_merchant);
+  const label = normalizeMerchant(merchant(row));
   if (/\bcostco\b/.test(label)) return "costco";
   if (/\b(?:amazon|amzn)\b/.test(label)) return "amazon";
   return label;
 };
-const merchantLabel = (key, row) => key === "costco" ? "Costco" : key === "amazon" ? "Amazon" : row ? merchant(row) : key;
+const merchantLabel = (key, row) => row?.assigned_merchant ||
+  (key === "costco" ? "Costco" : key === "amazon" ? "Amazon" : row ? merchant(row) : key);
+const hasMerchantHistory = row => Boolean(row.assigned_merchant) || ["purchase", "credit"].includes(row.kind);
 const merchantHref = key => "#merchants/" + encodeURIComponent(key);
 const receiptHref = receipt => "/api/costco-receipt/" + encodeURIComponent(receipt.id);
 
@@ -135,7 +140,7 @@ function metrics(purchases, note = "") {
   return `<div class="metrics">
     <section class="metric lead"><div class="metric-heading"><span class="metric-icon">${icon("wallet")}</span><div class="label">Net spending</div></div><div class="metric-value numeric">${fmt(total)}</div><small>${esc(note || "After refunds and reimbursements")}</small></section>
     <section class="metric"><div class="metric-heading"><span class="metric-icon">${icon("transactions")}</span><div class="label">Gross outflows</div></div><div class="metric-value numeric">${fmt(gross)}</div><small>${purchases.filter(row => row.amount > 0).length.toLocaleString()} posted debits counted</small></section>
-    <section class="metric"><div class="metric-heading"><span class="metric-icon credit-icon">${icon("reimbursements")}</span><div class="label">Applied credits</div></div><div class="metric-value numeric">${fmt(credits)}</div><small>Refunds &amp; reimbursements</small></section>
+    <section class="metric"><div class="metric-heading"><span class="metric-icon credit-icon">${icon("reimbursements")}</span><div class="label">refunds/<wbr>reimbursements</div></div><div class="metric-value numeric">${fmt(credits)}</div><small>Deducted from gross outflows</small></section>
   </div>`;
 }
 
@@ -228,12 +233,12 @@ function monthlyChart(months) {
   }).join("");
   return `<div class="chart-shell" style="--zero:${lower / divisions * 100}%;--chart-step:${100 / divisions}%">
     <div class="chart-scale" aria-hidden="true">${ticks}</div><div class="chart-plot">${bars}</div></div>
-    <div class="legend"><span>Net spending</span>${breakdown ? "<span>Applied credits</span>" : ""}${low ? '<span class="net-credit">Net credit</span>' : ""}</div>`;
+    <div class="legend"><span>Net spending</span>${breakdown ? "<span>refunds/reimbursements</span>" : ""}${low ? '<span class="net-credit">Net credit</span>' : ""}</div>`;
 }
 
 function chartControl() {
   return `<label class="chart-control"><span class="sr-only">Spending chart view</span><select id="chart-mode">
-    <option value="breakdown"${state.chartMode === "breakdown" ? " selected" : ""}>Net + credits</option>
+    <option value="breakdown"${state.chartMode === "breakdown" ? " selected" : ""}>Net + refunds</option>
     <option value="net"${state.chartMode === "net" ? " selected" : ""}>Net only</option></select></label>`;
 }
 
@@ -297,14 +302,14 @@ function monthDetail(key) {
       <small class="muted">${labelDate(receipt.date)} · ${esc(detail)}</small></span><b class="numeric">${fmt(amount)}</b></a>`;
   }).join("");
   const actions = `<div class="actions">${button("View transactions", "jump", "spending-activity")}
-    ${credits ? button("View applied credits", "jump", "spending-credits") : ""}</div>`;
+    ${credits ? button("View refunds/reimbursements", "jump", "spending-credits") : ""}</div>`;
   return '<a class="back" href="#months">All months</a>' +
     heading(`${monthNames[month - 1]} ${year}`, "See spending, largest purchases, and credits for the month.", actions) + metrics(purchases, isCurrent ? "Month to date" : "") +
     `<div class="stack">${panel("Spending by category", categoryList(purchases, Infinity, group => `#months/${key}/${encodeURIComponent(group)}`), "Select a category to filter the transactions.")}
     ${panel("Largest purchases", `<div class="purchase-strip">${topPurchases(purchases)}</div>`, "Ranked by net cost.")}
     <div id="spending-activity" tabindex="-1">${panel(selected ? category(selected) + " activity" : "Purchases & category credits", transactionTable(activity, true, "spending"),
       selected ? `${monthNames[month - 1]} ${year} · ${fmt(amounts(activity).total)} net` : "", selected ? `<a class="btn small" href="#months/${key}">Show all</a>` : "")}</div>
-    ${credits ? `<div id="spending-credits" tabindex="-1">${panel("Credits applied to this month", `<div class="month-credit-list">${credits}</div>`, `${fmt(sum(creditEntries, "amount"))} reduced spending in ${monthNames[month - 1]}. Receipt dates may differ.`)}</div>` : ""}
+    ${credits ? `<div id="spending-credits" tabindex="-1">${panel("Refunds/reimbursements applied this month", `<div class="month-credit-list">${credits}</div>`, `${fmt(sum(creditEntries, "amount"))} reduced spending in ${monthNames[month - 1]}. Receipt dates may differ.`)}</div>` : ""}
     ${panel("Credits & income received", transactionTable(received, false, "received"), "Shown in the month the money arrived. Credits linked to purchases reduce spending in the original purchase month.")}
     </div>`;
 }
@@ -360,38 +365,45 @@ function categoryInsights(rows, excluded = false) {
   return panel("Insights", cards ? `<div class="insight-grid">${cards}</div>` : empty("No posted debits to analyze in this view."));
 }
 
-function categoryWorkspace(scope, overview, transactions) {
-  const key = JSON.stringify([scope.category, scope.subcategory || "", state.year, state.currency]);
+function chatContext(scope) {
+  const key = JSON.stringify([scope.category, scope.subcategory || "", scope.tripId || null, scope.tripId ? null : state.year, state.currency]);
   if (!categoryChats.has(key)) {
     categoryChats.set(key, {draft: "", messages: [], pending: false, collapsed: false, error: ""});
   }
-  const chat = categoryChats.get(key);
-  currentCategoryContext = {...scope, year: state.year, currency: state.currency, chat};
+  return {...scope, year: state.year, currency: state.currency, chat: categoryChats.get(key)};
+}
+
+function chatWorkspace(scope, overview, transactions) {
+  currentCategoryContext = chatContext(scope);
+  const {chat} = currentCategoryContext;
   return `<div class="category-workspace${chat.collapsed ? " chat-collapsed" : ""}">
     <div class="category-overview stack">${overview}</div>
-    <aside id="category-assistant" class="panel" aria-labelledby="category-chat-title">${categoryChatPanel(currentCategoryContext)}</aside>
+    <aside id="category-assistant" data-codex-chat class="panel" aria-labelledby="category-chat-title">${categoryChatPanel(currentCategoryContext)}</aside>
     <div class="category-transactions">${transactions}</div></div>`;
 }
 
 function categoryChatPanel(context) {
   const {name, year, currency, chat} = context;
+  const dashboard = context.category === "" && !context.tripId;
+  const prefix = dashboard ? "dashboard" : "category";
   const transcript = chat.messages.map(categoryChatMessage).join("");
-  return `<div class="category-chat-header"><h2 id="category-chat-title">Ask Codex</h2>
-    <button id="category-chat-toggle" type="button" class="btn small" data-chat-toggle aria-expanded="${!chat.collapsed}" aria-controls="category-chat-body">${chat.collapsed ? "Expand" : "Collapse"}</button></div>
+  return `<div class="category-chat-header"><h2 id="${prefix}-chat-title">Ask Codex</h2>
+    ${dashboard ? `<button type="button" class="icon-button" data-chat-close aria-label="Close Ask Codex">${icon("close")}</button>` :
+      `<button id="category-chat-toggle" type="button" class="btn small" data-chat-toggle aria-expanded="${!chat.collapsed}" aria-controls="category-chat-body">${chat.collapsed ? "Expand" : "Collapse"}</button>`}</div>
     <div id="category-chat-body"${chat.collapsed ? " hidden" : ""}>
-      <p class="category-chat-scope">${esc(name)} · ${year} · ${esc(currency)}</p>
-      <form id="category-question">
-        <label for="category-query" class="sr-only">Question about ${esc(name)}</label>
-        <textarea id="category-query" rows="2" maxlength="4000" placeholder="Ask about spending or request an edit"${chat.pending ? " disabled" : ""}>${esc(chat.draft)}</textarea>
+      <p class="category-chat-scope">${esc(name)} · ${esc(context.dates || year)} · ${esc(currency)}</p>
+      <form data-chat-form>
+        <label for="${prefix}-query" class="sr-only">Question about ${esc(name)}</label>
+        <textarea id="${prefix}-query" data-chat-input rows="2" maxlength="4000" placeholder="Ask about spending or request an edit"${chat.pending ? " disabled" : ""}>${esc(chat.draft)}</textarea>
         <div class="chat-actions">
-          <button id="category-chat-send" type="submit" class="btn primary small"${chat.pending || !chat.draft.trim() ? " disabled" : ""}>Send</button>
+          <button data-chat-send type="submit" class="btn primary small"${chat.pending || !chat.draft.trim() ? " disabled" : ""}>Send</button>
           <button type="button" class="text-button" data-chat-clear${chat.messages.length && !chat.pending ? "" : " hidden"}>New chat</button>
         </div>
       </form>
       <p class="category-chat-note">Sends this view’s data to your signed-in Codex. Requested edits are saved to your local ledger.</p>
       <p class="category-chat-status" role="status"${chat.pending ? "" : " hidden"}>Codex is working…</p>
       <p class="category-chat-error" role="alert"${chat.error ? "" : " hidden"}>${esc(chat.error)}</p>
-      <div class="category-chat-log" role="log" aria-label="Category conversation" aria-relevant="additions" aria-busy="${chat.pending}">${transcript}</div>
+      <div class="category-chat-log" role="log" aria-label="Codex conversation" aria-relevant="additions" aria-busy="${chat.pending}">${transcript}</div>
     </div>`;
 }
 
@@ -399,25 +411,38 @@ function categoryChatMessage({role, text}) {
   return `<article class="chat-message ${role}"><h3>${role === "user" ? "You" : "Codex"}</h3><p>${esc(text)}</p></article>`;
 }
 
-function updateCategoryChat(preferredFocus) {
-  const context = currentCategoryContext;
-  const aside = $("#category-assistant");
-  if (!context || !aside) return;
-  aside.closest(".category-workspace").classList.toggle("chat-collapsed", context.chat.collapsed);
-  aside.innerHTML = categoryChatPanel(context);
-  if (preferredFocus) document.getElementById(preferredFocus)?.focus({preventScroll: true});
+const dashboardAssistant = $("#dashboard-assistant");
+
+function renderChat(root, context, focusSelector) {
+  if (!root || !context) return;
+  root.closest(".category-workspace")?.classList.toggle("chat-collapsed", context.chat.collapsed);
+  root.innerHTML = categoryChatPanel(context);
+  if (focusSelector) $(focusSelector, root)?.focus({preventScroll: true});
 }
 
-function updateChatTurn(chat, message, failed = false) {
-  if (currentCategoryContext?.chat !== chat) return;
-  const composer = $("#category-query");
-  const transcript = $(".category-chat-log");
-  const error = $(".category-chat-error");
+$("#codex-open").addEventListener("click", () => {
+  if (!state.data) return;
+  dashboardChatContext = chatContext({category: "", name: "Dashboard"});
+  renderChat(dashboardAssistant, dashboardChatContext);
+  dashboardAssistant.showModal();
+  $("[data-chat-input]:enabled", dashboardAssistant)?.focus();
+});
+
+function chatFor(root) {
+  return root === dashboardAssistant ? dashboardChatContext : currentCategoryContext;
+}
+
+function updateChatTurn(root, chat, message, failed = false) {
+  if (root !== dashboardAssistant) root = $("#category-assistant");
+  if (!root || chatFor(root)?.chat !== chat) return;
+  const composer = $("[data-chat-input]", root);
+  const transcript = $(".category-chat-log", root);
+  const error = $(".category-chat-error", root);
   composer.disabled = chat.pending;
   composer.value = chat.draft;
-  $("#category-chat-send").disabled = chat.pending || !chat.draft.trim();
-  $("[data-chat-clear]").hidden = chat.pending || !chat.messages.length;
-  $(".category-chat-status").hidden = !chat.pending;
+  $("[data-chat-send]", root).disabled = chat.pending || !chat.draft.trim();
+  $("[data-chat-clear]", root).hidden = chat.pending || !chat.messages.length;
+  $(".category-chat-status", root).hidden = !chat.pending;
   error.hidden = !chat.error;
   error.textContent = chat.error;
   if (failed) transcript.lastElementChild?.remove();
@@ -434,7 +459,7 @@ function categoriesPage(key) {
     const rows = transfers.filter(row => row.category === key);
     return '<a class="back" href="#categories">All categories</a>' +
       heading(category(key), "Money movements excluded from spending totals.", "", state.year) +
-      categoryWorkspace({category: key, name: category(key)}, categoryInsights(rows, true),
+      chatWorkspace({category: key, name: category(key)}, categoryInsights(rows, true),
         panel("Transactions", transactionTable(rows), "Positive amounts moved out and negative amounts moved in."));
   }
   if (key === "shopping" || key === "health_wellness") {
@@ -445,7 +470,7 @@ function categoriesPage(key) {
     const name = selected ? shoppingLabel(selected) : "Shopping";
     return `<a class="back" href="#categories${selected ? "/shopping" : ""}">${selected ? "All shopping" : "All categories"}</a>` +
       heading(name, selected ? "Shopping · transaction details" : "See where your shopping went after credits.", "", state.year) +
-      metrics(rows) + categoryWorkspace({category: "shopping", subcategory: selected, name},
+      metrics(rows) + chatWorkspace({category: "shopping", subcategory: selected, name},
         categoryInsights(rows) + (selected ? "" : panel("Shopping breakdown", shoppingBreakdown(shopping), "Select a subcategory to see its transactions.")),
         panel("Transactions", transactionTable(rows, true, "spending")));
   }
@@ -455,7 +480,7 @@ function categoriesPage(key) {
     const positiveTotal = sum(byCategory(purchases).filter(group => group.total > 0), "total");
     const share = total > 0 && positiveTotal ? `${shareLabel.format(total / positiveTotal)} of positive net category spending · ${state.year}` : "";
     return '<a class="back" href="#categories">All categories</a>' + heading(category(key), share || "Review and recategorize individual transactions.", "", state.year) +
-      metrics(rows) + categoryWorkspace({category: key, name: category(key)}, categoryInsights(rows),
+      metrics(rows) + chatWorkspace({category: key, name: category(key)}, categoryInsights(rows),
         panel("Transactions", transactionTable(rows, true, "spending")));
   }
   const groups = byCategory(purchases);
@@ -469,12 +494,12 @@ function categoriesPage(key) {
   }).join("");
   return heading("Categories", "See what you spend on and drill into any category.", "", state.year) +
     `<div class="stack"><div class="category-report">${panel("Spending mix", categoryMix(purchases), "Share of categories with positive net spending")}</div>
-    <div id="category-breakdown" tabindex="-1">${panel("Category breakdown", rows ? `<div class="table-wrap"><table><thead><tr><th scope="col">Category</th><th scope="col" class="num">Gross</th><th scope="col" class="num">Credits</th><th scope="col" class="num">Net</th><th scope="col" class="num">Share</th></tr></thead><tbody>${rows}</tbody></table></div>` : empty("No posted purchases in this year."), "Net is gross spending minus applied credits.")}</div>
+    <div id="category-breakdown" tabindex="-1">${panel("Category breakdown", rows ? `<div class="table-wrap"><table><thead><tr><th scope="col">Category</th><th scope="col" class="num">Gross</th><th scope="col" class="num">Credits</th><th scope="col" class="num">Net</th><th scope="col" class="num">Share</th></tr></thead><tbody>${rows}</tbody></table></div>` : empty("No posted purchases in this year."), "Net is gross spending minus refunds and reimbursements applied to spending.")}</div>
     ${panel("Excluded from spending", `<div class="tile-grid">${excluded}</div>`)}</div>`;
 }
 
 function merchantsPage(key) {
-  const rows = reportRows().filter(row => row.kind === "purchase" || row.kind === "credit");
+  const rows = reportRows().filter(hasMerchantHistory);
   if (key) {
     const activity = rows.filter(row => merchantKey(row) === key);
     const purchases = spendingRows(activity);
@@ -485,7 +510,7 @@ function merchantsPage(key) {
       <small class="muted">${receiptStatus(receipt)}</small></div>
       <strong class="numeric">${fmt(receipt.amount)}</strong></div>`).join("");
     return '<a class="back" href="#merchants">All merchants</a>' +
-      heading(merchantLabel(key, activity[0]), "Browse purchases, credits, and available receipt details.", "", state.year) +
+      heading(merchantLabel(key, activity.find(row => row.assigned_merchant) || activity[0]), "Browse purchases, credits, and available receipt details.", "", state.year) +
       metrics(purchases) + `<div class="stack">${receipts.length ? panel("Saved Costco receipts", receiptList) : ""}
       ${panel("Transactions", transactionTable(activity, true, "merchant"))}</div>`;
   }
@@ -495,8 +520,12 @@ function merchantsPage(key) {
     if (!group) continue;
     if (!groups.has(group)) groups.set(group,{key:group,label:merchantLabel(group,row),count:0,gross:0});
     const entry = groups.get(group);
+    if (row.assigned_merchant && !entry.assigned) {
+      entry.label = row.assigned_merchant;
+      entry.assigned = true;
+    }
     entry.count++;
-    if (row.amount > 0) entry.gross += row.amount;
+    if (row.amount > 0 && row.kind !== "transfer") entry.gross += row.amount;
   }
   const search = state.search.trim().toLowerCase();
   const scope = "merchant-list";
@@ -562,7 +591,7 @@ function transactionTable(rows, controls = true, section = "activity") {
   const scope = route().join("/") + ":" + section;
   const needle = controls ? state.search.trim().toLowerCase() : "";
   const found = rows.filter(row => !needle || [
-    merchant(row), row.description, row.date, category(row.category), currentAccountMap.get(row.account)?.label, fmt(Math.abs(row.amount), row.currency),
+    merchant(row), row.assigned_merchant, row.description, row.date, category(row.category), currentAccountMap.get(row.account)?.label, fmt(Math.abs(row.amount), row.currency),
   ].some(value => value?.toLowerCase().includes(needle)));
   const filtered = sortedRows(found, scope, {
     merchant, date: row => row.date, category: row => category(row.category), amount: row => tableAmount(row, scope),
@@ -578,7 +607,7 @@ function transactionTable(rows, controls = true, section = "activity") {
   const count = standalone ? `${filtered.length - standalone} debits · ${standalone} category ${standalone === 1 ? "credit" : "credits"}` : `${filtered.length} found`;
   return `<div class="toolbar"><input id="tx-search" type="search" aria-label="Search transactions" placeholder="Merchant, amount, date or account" value="${esc(state.search)}">
     <div class="actions"><small class="muted">${count}${state.selected.size ? ` · ${state.selected.size} selected` : ""}</small>
-    ${state.selected.size ? button("Change category", "bulk", "", "small") + button("Assign trip", "bulk-trip", "", "small") : ""}</div></div>${displayed.length ? tableBody(displayed, true, scope, footer) : empty("No matching transactions.")}`;
+    ${state.selected.size ? button("Change category", "bulk", "", "small") + button("Assign merchant", "bulk-merchant", "", "small") + button("Assign trip", "bulk-trip", "", "small") : ""}</div></div>${displayed.length ? tableBody(displayed, true, scope, footer) : empty("No matching transactions.")}`;
 }
 
 function tableBody(rows, controls, scope, footer = "") {
@@ -596,6 +625,7 @@ function tableBody(rows, controls, scope, footer = "") {
     return `<tr>${controls ? `<td>${!direct ? `<input data-select="${esc(row.id)}" type="checkbox" aria-label="Select ${esc(merchant(row))}" ${state.selected.has(row.id) ? "checked" : ""}>` : ""}</td>` : ""}
     <td><div class="table-entity"><span class="entity-icon">${icon(row.kind === "credit" || direct ? "reimbursements" : row.kind === "transfer" ? "transactions" : "receipt")}</span><div>${action}<small>${esc(currentAccountMap.get(row.account)?.label || "")}
     ${row.amazon_items?.length ? (row.amazon_order?.match_basis === "date_amount" ? " · Likely order match" : " · Order details available") : ""}</small>
+    ${row.assigned_merchant && !scope.endsWith(":merchant") ? `<small><a href="${esc(merchantHref(merchantKey(row)))}">${esc(row.assigned_merchant)}</a></small>` : ""}
     ${row.amazon_items?.length && scope.endsWith(":merchant") ? `<small class="order-preview">${esc(row.amazon_items[0])}${row.amazon_items.length > 1 ? ` · +${row.amazon_items.length - 1} more` : ""}</small>` : ""}</div></div></td>
     <td class="numeric">${labelDate(row.date)}</td><td>${esc(category(row.category))}
     ${row.shopping_subcategory ? `<small>${esc(shoppingLabel(row.shopping_subcategory))}</small>` : ""}</td>
@@ -641,6 +671,25 @@ function tripTimeline(trips) {
     }).join("")}</div>`;
 }
 
+function tripInsights(rows) {
+  if (!rows.length) return panel("Insights", empty("No purchases to analyze for this trip."));
+  const {gross, credits, total} = amounts(rows);
+  const top = byCategory(rows)[0];
+  const daily = new Map();
+  for (const row of rows) {
+    const day = row.travel_date || row.date;
+    daily.set(day, (daily.get(day) || 0) + net(row));
+  }
+  const [day, dayNet] = [...daily].sort((a, b) => b[1] - a[1])[0];
+  return panel("Insights", `<div class="insight-grid">
+    ${top.total > 0 ? `<article><h3>Top spending category</h3><strong>${esc(category(top.key))}</strong>
+      <small>${fmt(top.total)} · ${shareLabel.format(top.total / total)} of net trip cost</small></article>` : ""}
+    ${dayNet > 0 ? `<article><h3>Highest-cost day</h3><strong>${labelDate(day)}</strong><small>${fmt(dayNet)} net</small></article>` : ""}
+    <article><h3>Refunds &amp; reimbursements</h3><strong class="numeric">${fmt(credits)}</strong>
+      <small>${gross ? shareLabel.format(credits / gross) : "0%"} of gross spending credited</small></article>
+  </div>`);
+}
+
 function tripsPage(id) {
   const trips = state.data.trips.filter(t => ["automatic", "confirmed"].includes(t.status));
   const trip = trips.find(t => String(t.id) === id);
@@ -651,11 +700,11 @@ function tripsPage(id) {
     const caption = trip.booking ? "Booking group" : "Purchase activity";
     return '<a class="back" href="#trips">All trips</a>' + heading(trip.name, caption + " · " + tripDates(trip),
       button("Edit trip", "trip-edit", trip.id) + " " + button("Merge", "trip-merge", trip.id)) +
-      metrics(purchases) + `<div class="stack">
-      ${purchases.length ? panel("Spending by category", categoryList(purchases, Infinity, group => `#trips/${trip.id}/${encodeURIComponent(group)}`), "Select a category to filter the transactions.") : ""}
-      ${!trip.booking && purchases.length > 1 ? panel("Largest trip purchases", `<div class="purchase-strip">${topPurchases(purchases, 3)}</div>`, "Ranked by net cost.") : ""}
-      <div id="spending-activity" tabindex="-1">${panel(selected ? category(selected) + " activity" : trip.booking ? "Booking purchases" : "Trip purchases", transactionTable(activity, true, "spending"), "", `<div class="actions">
-      ${selected ? `<a class="btn small" href="#trips/${trip.id}">Show all</a>` : ""}${state.selected.size ? button("Split selected", "trip-split", trip.id) : ""}${button("Add purchases", "trip-add", trip.id)}</div>`)}</div></div>`;
+      metrics(purchases) + chatWorkspace({category: "", tripId: trip.id, name: trip.name, dates: tripDates(trip)},
+      tripInsights(purchases) +
+      (purchases.length ? panel("Spending by category", categoryList(purchases, Infinity, group => `#trips/${trip.id}/${encodeURIComponent(group)}`), "Select a category to filter the transactions.") : ""),
+      `<div id="spending-activity" tabindex="-1">${panel(selected ? category(selected) + " activity" : trip.booking ? "Booking purchases" : "Trip purchases", transactionTable(activity, true, "spending"), "", `<div class="actions">
+      ${selected ? `<a class="btn small" href="#trips/${trip.id}">Show all</a>` : ""}${state.selected.size ? button("Split selected", "trip-split", trip.id) : ""}${button("Add purchases", "trip-add", trip.id)}</div>`)}</div>`);
   }
   const selected = trips.filter(t => (!t.start && !t.end) ||
     ((t.start || t.end).slice(0, 4) <= state.year && (t.end || t.start).slice(0, 4) >= state.year));
@@ -686,14 +735,16 @@ function reimbursementsPage(id) {
   const item = currentRowMap.get(id);
   if (item?.kind === "credit") {
     return '<a class="back" href="#reimbursements">All reimbursements</a>' +
-      heading(merchant(item), "Review the category, payment, and any purchase links.", button("Change category", "assign-credit", item.id, "primary")) +
+      heading(merchant(item), "Review the category, payment, and any purchase links.",
+        `<div class="actions">${button("Assign merchant", "assign-merchant", item.id)}${button("Change category", "assign-credit", item.id, "primary")}</div>`) +
+      (item.assigned_merchant ? `<p class="section-note"><a href="${esc(merchantHref(merchantKey(item)))}">${esc(item.assigned_merchant)}</a></p>` : "") +
       panel("Receipt details", creditCard(item), item.assignment?.reason || "Incoming credit.");
   }
   const rows = reportRows().filter(row => row.kind === "credit");
   const scope = "reimbursements";
   const needle = state.search.trim().toLowerCase();
   const filtered = sortedRows(rows.filter(row => (state.creditFilter === "all" || creditStatus(row)[1] === state.creditFilter) &&
-    (!needle || [merchant(row), row.description, creditCategory(row), row.date].some(value => value.toLowerCase().includes(needle)))),
+    (!needle || [merchant(row), row.assigned_merchant, row.description, creditCategory(row), row.date].some(value => value?.toLowerCase().includes(needle)))),
   scope, {merchant, date: row => row.date, amount: row => -row.amount, category: creditCategory, status: row => creditStatus(row)[0]});
   const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
   state.page = Math.min(state.page, pageCount);
@@ -772,7 +823,7 @@ function dataPage() {
     ${panel("SQLite backup", '<p class="section-note">Includes transaction history, category edits, trips, and confirmed allocations. Store the downloaded copy in a private, encrypted location.</p>', "", button("Download backup", "backup", "", "small"))}</div>
     ${panel("Amazon orders", `<p class="section-note">${state.data.amazon_sync.orders} orders captured from Chrome · ${state.data.amazon_count} matched card charges</p>
     <p class="section-note">Use the paired Chrome connector with the local Amazon MCP to sync the selected year.</p>`, "", button("Import order snapshot", "amazon-capture", "", "small"))}
-    ${panel("Setup and sharing", '<p class="section-note">Review your coverage or share a fresh copy of Spending Atlas with a friend. The starter includes the app and setup guide. A SQLite backup includes your financial data.</p>', "", '<div class="inline"><a class="btn small" href="#setup/coverage">Check coverage</a><a class="btn primary small" href="/download/starter">Download shareable starter</a></div>')}</div>`;
+    ${panel("Setup and sharing", '<p class="section-note">Share the GitHub setup link so someone can start their own Spending Atlas dashboard. The database backup contains your financial data.</p>', "", '<div class="inline"><a class="btn small" href="#setup/coverage">Check coverage</a><a class="btn primary small" href="https://github.com/sohumsanu/spending-atlas#start-with-codex" target="_blank" rel="noopener noreferrer">Share setup link</a></div>')}</div>`;
 }
 
 const coverageDay = value => Date.parse(value + "T00:00:00Z") / 86400000;
@@ -874,10 +925,20 @@ function setupPage(key) {
   let body;
   if (active === "start") {
     body = panel("How would you like to add your transactions?", `<div class="setup-options">
+      <article><h3>Use files from your bank</h3><p class="section-note">Sign in to your bank yourself and download a transactions CSV. The import runs on this computer, with a preview before anything is saved.</p>
+        ${button("Import a bank CSV", "import", "", "primary")}
+        <details class="bank-download-help"><summary>Where to find a bank export</summary>
+          <ol><li>Open one checking, savings, or credit card account in your bank’s website.</li>
+          <li>Open its activity or transactions page. Look for <strong>Download transactions</strong>, <strong>Download</strong>, or <strong>Export</strong>.</li>
+          <li>Choose a date range, select CSV, and include posted purchases, credits, and payments. Start with a recent month and repeat for each account.</li></ol>
+          <ul><li><strong>Citi:</strong> In the card’s Transactions section, look for the download icon next to the date filter.</li>
+          <li><strong>Bank of America:</strong> From the account’s Activity tab, use Download transactions.</li>
+          <li><strong>Capital One:</strong> Open the account and use Download Transactions near its activity.</li></ul>
+          <p class="section-note">Save PDF statements as evidence for the coverage check. Use a transaction CSV for the import.</p>
+          <a class="text-button" href="/download/bank-csv-example">Download a CSV example</a></details></article>
       <article><h3>Use ChatGPT Finances</h3><p class="section-note">Bring in activity from banks already connected to your own ChatGPT account.</p>
-        ${button("Get the Codex import prompt", "setup-prompt", "setup-bank", "primary")}${button("Import prepared snapshot", "setup-finances")}</article>
-      <article><h3>Import a bank statement</h3><p class="section-note">Download a CSV from your bank and start with one account. You can add the rest later.</p>
-        ${button("Import a CSV", "import", "", "primary")}</article></div>`,
+        ${button("Get the Codex import prompt", "setup-prompt", "setup-bank", "primary")}${button("Import prepared snapshot", "setup-finances")}</article></div>
+        ${state.data.accounts.length ? '<p><a class="btn" href="#overview">Open spending overview</a></p>' : ""}`,
       state.data.accounts.length ? `${state.data.accounts.length} imported accounts are available.` : "Choose either option. You can combine sources for separate accounts or uncovered dates.");
   } else if (active === "coverage") {
     const rows = report.rows.map(row => {
@@ -892,7 +953,7 @@ function setupPage(key) {
     }).join("");
     const title = report.complete ? "Coverage verified" : "Coverage needs review";
     body = panel(title, `<div class="setup-coverage-tools"><label>Audit year <input id="setup-year" type="number" min="1900" max="${setup.today.slice(0, 4)}" value="${year}"></label>
-        ${button("Add an account to check", "setup-expect", "", "small")}${button("Get the Codex coverage prompt", "setup-prompt", "setup-bank", "primary small")}</div>
+        ${button("Add an account to check", "setup-expect", "", "small")}<a class="btn small" href="#setup/start">Get another bank CSV</a>${button("Optional Codex coverage help", "setup-prompt", "setup-bank", "small")}</div>
       <label class="check"><input id="setup-inventory" type="checkbox"${report.confirmed ? " checked" : ""}> This checklist includes every account I used in ${year}</label>
       ${rows || empty("Add your bank accounts, cards, and payment apps to check whether you have the whole year.")}`,
       `Auditing ${labelDate(report.start)} to ${labelDate(report.end)}. Use statement or provider date ranges as evidence. First and last transaction dates alone can miss gaps.`);
@@ -980,8 +1041,7 @@ function openDialog(title, body, onSave, label = "Save changes") {
     submit.disabled = true;
     error.hidden = true;
     try {
-      await onSave(new FormData(form));
-      modal.close();
+      if (await onSave(new FormData(form)) !== false) modal.close();
     } catch (e) {
       error.textContent = e.message;
       error.hidden = false;
@@ -1006,12 +1066,12 @@ function updateSearch() {
   const trips = query ? state.data.trips.filter(t => ["automatic", "confirmed"].includes(t.status) && (t.name + " " + t.destination).toLowerCase().includes(query))
     .slice(0, 4).map(t => searchResult(t.name, "Trip · " + tripDates(t), "#trips/" + t.id, "trips")) : [];
   const matching = query ? state.data.transactions.filter(row =>
-    [merchant(row), row.description, row.date, currentAccountMap.get(row.account)?.label, fmt(Math.abs(row.amount), row.currency)]
+    [merchant(row), row.assigned_merchant, row.description, row.date, currentAccountMap.get(row.account)?.label, fmt(Math.abs(row.amount), row.currency)]
       .some(item => item?.toLowerCase().includes(query))) : [];
   const merchantHits = new Map();
   for (const row of matching) {
     const key = merchantKey(row);
-    if (row.date.startsWith(state.year) && row.currency === state.currency && key.includes(query) && !merchantHits.has(key) && ["purchase", "credit"].includes(row.kind)) merchantHits.set(key, row);
+    if (row.date.startsWith(state.year) && row.currency === state.currency && key.includes(query) && !merchantHits.has(key) && hasMerchantHistory(row)) merchantHits.set(key, row);
     if (merchantHits.size >= 3) break;
   }
   const merchants = [...merchantHits].map(([key, row]) => searchResult(merchantLabel(key, row), "Merchant", merchantHref(key), "merchants"));
@@ -1049,10 +1109,32 @@ function tripOptions(selected, excluded = null) {
 }
 
 async function save(path, data, message) {
-  await request(path, data);
+  const result = await request(path, data);
   state.selected.clear();
   await refresh();
-  toast(message);
+  toast(typeof message === "function" ? message(result) : message);
+}
+
+function merchantField(row) {
+  const options = new Map();
+  for (const entry of state.data.transactions) {
+    if (!hasMerchantHistory(entry)) continue;
+    const key = merchantKey(entry);
+    if (key && (entry.assigned_merchant || !options.has(key))) options.set(key, merchantLabel(key, entry));
+  }
+  const choices = [...options.values()].sort((a, b) => a.localeCompare(b))
+    .map(label => `<option value="${esc(label)}"></option>`).join("");
+  return `<label>Merchant<input name="assigned_merchant" maxlength="150" list="merchant-options" value="${esc(row?.assigned_merchant)}"
+    placeholder="${row ? esc(merchant(row)) : "Choose or type a merchant"}" autocomplete="off"></label>
+    <datalist id="merchant-options">${choices}</datalist>
+    <p class="section-note">Use the same merchant name to group transactions in Merchant history. Clear the field to use the original merchant.</p>`;
+}
+
+function merchantAssignmentDialog(ids, row) {
+  openDialog("Assign merchant", `<div class="fields">${merchantField(row)}</div>`, async form => {
+    const assigned_merchant = form.get("assigned_merchant").trim() || null;
+    await save("/api/edit", {ids, assigned_merchant}, "Merchant assignment saved.");
+  });
 }
 
 function transactionDialog(row) {
@@ -1082,16 +1164,16 @@ function transactionDialog(row) {
     ${row.posted_date ? `<p class="section-note">Bank posting date ${labelDate(row.posted_date)}</p>` : ""}
     ${row.posted_merchant && row.posted_merchant !== row.description ? `<p class="section-note">Posted as ${esc(row.posted_merchant)}</p>` : ""}
     <div class="transaction-total"><small class="muted">${amountLabel}</small><strong class="numeric">${fmt(amount, row.currency)}</strong>
-    ${credited ? `<small class="muted">Original charge ${fmt(row.amount, row.currency)} · Applied credits ${fmt(row.offset, row.currency)}</small>` : ""}</div>
+    ${credited ? `<small class="muted">Original charge ${fmt(row.amount, row.currency)} · refunds/reimbursements ${fmt(row.offset, row.currency)}</small>` : ""}</div>
     ${row.description && row.description !== merchant(row) ? `<p class="section-note">${esc(row.description)}</p>` : ""}
     ${reason ? `<p class="section-note">${esc(reason)}</p>` : ""}
-    <p class="section-note"><a class="text-button" href="${esc(merchantHref(merchantKey(row)))}">View merchant history</a>
+    <p class="section-note"><a class="text-button" href="${esc(merchantHref(merchantKey(row)))}">${row.assigned_merchant ? `View ${esc(row.assigned_merchant)} history` : "View merchant history"}</a>
     ${(state.data.costco_receipts || []).filter(receipt => receipt.transaction_id === row.id).map(receipt =>
       ` · <button type="button" class="text-button" data-dialog-receipt="${esc(receipt.id)}">Open Costco receipt</button>`).join("")}</p>
     ${amazon}
     ${row.city ? `<p class="section-note">Merchant location: ${esc([row.city, row.region, row.country].filter(Boolean).join(", "))}</p>` : ""}
     ${cards ? `<section class="transaction-reimbursements"><h3>Reimbursements &amp; refunds</h3>${cards}</section>` : ""}
-    <div class="fields"><label>Display name<input name="display_name" maxlength="150" value="${row.posted_merchant ? esc(row.merchant) : ""}" placeholder="${esc(row.posted_merchant || merchant(row))}"></label>
+    <div class="fields">${merchantField(row)}<label>Display name<input name="display_name" maxlength="150" value="${row.posted_merchant ? esc(row.merchant) : ""}" placeholder="${esc(row.posted_merchant || merchant(row))}"></label>
     <label>Reporting date<input type="date" name="reporting_date" value="${row.posted_date ? esc(row.date) : ""}"></label>
     <label>Category<select name="category">${categoryOptions(row.amount, row.category)}</select></label>
     ${row.amount > 0 ? `<div data-shopping-field hidden><label>Shopping subcategory<select name="shopping_subcategory">
@@ -1103,11 +1185,13 @@ function transactionDialog(row) {
     const proposedCategory = form.get("category");
     const proposedSubcategory = form.get("shopping_subcategory");
     const proposedTrip = form.get("trip") ? Number(form.get("trip")) : null;
+    const assignedMerchant = form.get("assigned_merchant").trim() || null;
+    if (assignedMerchant !== (row.assigned_merchant || null)) next.assigned_merchant = assignedMerchant;
     const displayName = form.get("display_name").trim() || null;
     const reportingDate = form.get("reporting_date") || null;
     if (displayName !== (row.posted_merchant ? row.merchant : null)) next.display_name = displayName;
     if (reportingDate !== (row.posted_date ? row.date : null)) next.reporting_date = reportingDate;
-    if (proposedCategory !== row.category || row.review || form.has("remember")) {
+    if (proposedCategory !== row.category || (row.review && !("assigned_merchant" in next)) || form.has("remember")) {
       next.category = proposedCategory;
       next.remember = form.has("remember");
     }
@@ -1220,12 +1304,15 @@ function tripDialog(trip, split) {
   openDialog(split ? "Split into a new trip" : suggested ? "Review trip suggestion" : trip ? "Edit trip" : "Create trip",
     (trip?.booking ? '<p class="section-note">Give this booking a trip name to move it to the trip timeline.</p>' :
       trip?.reason ? `<p class="section-note">${esc(trip.reason)}</p>` : "") +
+    (trip ? '<p class="section-note">Changing the dates updates the trip’s purchases and totals. The app adds matches for the destination and removes purchases outside the new dates.</p>' : "") +
     `<div class="fields"><label>Name<input name="name" required maxlength="100" value="${esc(trip?.name)}"></label>
     <label>Destination<input name="destination" maxlength="150" value="${esc(trip?.destination)}"></label>
     <div class="two"><label>Start<input name="start" type="date" value="${esc(trip?.start)}"></label>
     <label>End<input name="end" type="date" value="${esc(trip?.end)}"></label></div></div>`,
-    async form => save("/api/trip", {id: trip?.id, ...split, ...Object.fromEntries(form)},
-      suggested || (trip?.booking && form.get("name").trim() !== trip.name) ? "Trip confirmed." : "Trip saved."),
+    async form => save("/api/trip", {id: trip?.id, ...split, ...Object.fromEntries(form)}, ({reconciliation}) => {
+      if (reconciliation) return `Trip recalculated. ${reconciliation.added} added, ${reconciliation.removed} removed.`;
+      return suggested || (trip?.booking && form.get("name").trim() !== trip.name) ? "Trip confirmed." : "Trip saved.";
+    }),
     suggested ? "Confirm trip" : "Save trip");
 }
 
@@ -1244,15 +1331,133 @@ function addToTrip(id) {
   fill();
 }
 
+function bankColumn(name, label, columns, suggestion, optional = false) {
+  const blank = optional ? "None" : "Choose a column";
+  return `<label>${label}<select name="column-${name}"><option value="">${blank}</option>
+    ${columns.map((column, index) => `<option value="${index}"${index === suggestion ? " selected" : ""}>${esc(column || "Unnamed column")}</option>`).join("")}
+  </select></label>`;
+}
+
+function bankPreview(plan) {
+  const status = {new: "Will import", already_imported: "Already imported", review: "Held for review"};
+  const totals = Object.entries(plan.totals).map(([currency, values]) =>
+    `<li>${esc(currency)} · Outflows ${fmt(values.outflows, currency)} · Inflows ${fmt(values.inflows, currency)}</li>`).join("");
+  const rows = plan.samples.map(row => `<tr><td>${labelDate(row.date)}</td><td>${esc(row.description)}</td>
+    <td>${row.amount > 0 ? "Outflow" : "Inflow"} ${fmt(Math.abs(row.amount), row.currency)}</td><td>${status[row.status]}</td></tr>`).join("");
+  return `<h3>Import preview</h3><p><strong>${esc(plan.account)}</strong> · ${labelDate(plan.first)} to ${labelDate(plan.last)}</p>
+    <p>${plan.counts.new} new · ${plan.counts.already_imported} already imported · ${plan.counts.review} held for review</p>
+    ${plan.pending || plan.zero ? `<p class="section-note">Skipped ${plan.pending} pending and ${plan.zero} zero-amount rows.</p>` : ""}
+    ${totals ? `<ul aria-label="New transaction totals">${totals}</ul>` : ""}
+    ${plan.counts.review ? '<p class="section-note">Held rows may overlap existing transactions or reuse an existing ID with different details. Compare them with the bank before adding them.</p>' : ""}
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Sample transaction</th><th>Amount</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="section-note">Check that purchases appear as outflows and refunds as inflows. Transaction dates help you find the records. Use your statement to verify complete coverage.</p>`;
+}
+
 function importDialog() {
-  openDialog("Import a statement", '<p class="section-note">CSV needs Date, Amount, and Description or Merchant columns. Optional columns include Transaction ID, Currency, City, Region, Country, Channel, Travel Date, and Memo.</p><div class="fields"><label>Account name<input name="account" maxlength="120" required placeholder="e.g. Everyday checking"></label><label>Amount convention<select name="convention"><option value="debits_positive">Purchases are positive</option><option value="debits_negative">Purchases are negative</option></select></label><label>CSV file<input name="csv" type="file" accept=".csv,text/csv" required></label></div>',
-  async form => {
-    const file = form.get("csv");
-    if (!file?.size || file.size > 8_000_000) throw Error("Choose a CSV smaller than 8 MB.");
-    const result = await request("/api/import", {account: form.get("account"), convention: form.get("convention"), content: await file.text()});
-    await refresh();
-    toast(`${result.added} added, ${result.updated} updated, ${result.unchanged} unchanged.`);
-  }, "Import statement");
+  const existing = state.data.accounts.filter(account => account.id.startsWith("csv:"));
+  let content, reviewed, selectedFile, revision = 0;
+  openDialog("Import a bank CSV", `<p class="section-note">Choose a file with posted transactions from one account. You’ll map the columns and review a preview before saving.</p>
+    <div class="fields"><label>Account<select name="saved-account"><option value="">Add an account</option>
+      ${existing.map(account => `<option value="${esc(account.label)}">${esc(account.label)}</option>`).join("")}</select></label>
+      <label id="bank-nickname">Account nickname<input name="account" maxlength="120" required placeholder="e.g. Everyday checking"></label>
+      <label>Bank CSV file<input name="csv" type="file" accept=".csv,text/csv" required></label>
+      <div id="bank-fields" class="fields"></div>
+    </div><section id="bank-preview" aria-live="polite" tabindex="-1"></section>`, async form => {
+    if (!content || !$('[name="amount-mode"]', modal)) throw Error("Choose a readable bank CSV before continuing.");
+    const mapping = Object.fromEntries(Array.from(form).filter(([key, value]) => key.startsWith("column-") && value !== "")
+      .map(([key, value]) => [key.slice(7), Number(value)]));
+    const options = {content, account: form.get("saved-account") || form.get("account"),
+      mode: form.get("amount-mode"), convention: form.get("convention"), currency: form.get("currency"), mapping};
+    if (!reviewed) {
+      const startedAt = revision;
+      const plan = await request("/api/bank-import", {...options, action: "preview"});
+      if (revision !== startedAt) return false;
+      reviewed = plan;
+      const preview = $("#bank-preview", modal);
+      preview.innerHTML = bankPreview(plan);
+      const submit = $('[type="submit"]', modal);
+      submit.textContent = plan.counts.new ? `Import ${plan.counts.new} transactions` : "Done";
+      preview.focus();
+      return false;
+    }
+    if (!reviewed.counts.new) return;
+    try {
+      const result = await request("/api/bank-import", {...options, action: "commit", token: reviewed.token});
+      await refresh();
+      toast(`${result.added} added, ${result.already_imported} already imported, ${result.review} held for review.`);
+    } catch (error) {
+      resetPreview();
+      throw error;
+    }
+  }, "Preview import");
+
+  const form = $("form", modal);
+  const submit = $('[type="submit"]', form);
+  const fields = $("#bank-fields", form);
+  function resetPreview() {
+    revision++;
+    reviewed = null;
+    $("#bank-preview", form).replaceChildren();
+    submit.textContent = "Preview import";
+  }
+
+  function syncFields() {
+    const mode = $('[name="amount-mode"]', form)?.value;
+    for (const region of form.querySelectorAll("[data-amount-mode]")) {
+      const active = region.dataset.amountMode.split(" ").includes(mode);
+      region.hidden = !active;
+      region.querySelectorAll("select").forEach(select => { select.disabled = !active; });
+    }
+    const nickname = $("#bank-nickname", form);
+    nickname.hidden = !!$('[name="saved-account"]', form).value;
+    $("input", nickname).required = !nickname.hidden;
+  }
+
+  form.addEventListener("input", resetPreview);
+  form.addEventListener("change", syncFields);
+  $('[name="csv"]', form).onchange = async event => {
+    const file = event.target.files[0];
+    selectedFile = file;
+    content = null;
+    resetPreview();
+    fields.replaceChildren();
+    const error = $(".dialog-error", form);
+    error.hidden = true;
+    submit.disabled = true;
+    try {
+      if (!file?.size || file.size > 8_000_000) throw Error("Choose a CSV smaller than 8 MB.");
+      const bytes = await file.arrayBuffer();
+      let input;
+      try { input = new TextDecoder("utf-8", {fatal: true}).decode(bytes); }
+      catch { input = new TextDecoder("windows-1252").decode(bytes); }
+      const {columns, mapping, mode} = await request("/api/bank-import", {action: "inspect", content: input});
+      if (selectedFile !== file) return;
+      content = input;
+      const column = (key, title, optional = false) => bankColumn(key, title, columns, mapping[key], optional);
+      fields.innerHTML = `${column("date", "Date column")}${column("description", "Merchant or description column")}
+        <label>How the file lists amounts<select name="amount-mode">
+          ${[["signed", "One signed amount column"], ["split", "Separate debit and credit columns"], ["typed", "Amount and transaction direction"]].map(([key, title]) =>
+            `<option value="${key}"${mode === key ? " selected" : ""}>${title}</option>`).join("")}
+        </select></label>
+        <div class="fields" data-amount-mode="signed typed">${column("amount", "Amount column")}</div>
+        <div class="fields" data-amount-mode="signed"><label>Sign of purchases and withdrawals<select name="convention">
+          <option value="">Choose from your CSV</option><option value="debits_positive">Positive, e.g. 42.30</option>
+          <option value="debits_negative">Negative, e.g. -42.30</option></select></label></div>
+        <div class="fields" data-amount-mode="split">${column("debit", "Debit column")}${column("credit", "Credit column")}</div>
+        <div class="fields" data-amount-mode="typed">${column("direction", "Direction or type column")}</div>
+        <details><summary>Currency, transaction IDs, and status</summary><div class="fields">
+          <label>Default currency<input name="currency" value="USD" maxlength="3" pattern="[A-Za-z]{3}" required></label>
+          ${column("currency", "Currency column", true)}${column("reference", "Unique transaction ID column", true)}
+          ${column("status", "Status column", true)}</div></details>`;
+      syncFields();
+    } catch (failure) {
+      if (selectedFile !== file) return;
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally {
+      if (selectedFile === file) submit.disabled = false;
+    }
+  };
 }
 
 async function saveSetup(data) {
@@ -1441,6 +1646,9 @@ main.addEventListener("click", async event => {
     } else if (action === "dismiss-credit" || action === "restore-credit") {
       const next = action === "dismiss-credit" ? "dismiss" : "restore";
       await save("/api/credit", {credit: value, action: next}, next === "dismiss" ? "Credit dismissed." : "Credit returned to review.");
+    } else if (action === "assign-merchant" || action === "bulk-merchant") {
+      const row = action === "assign-merchant" ? currentRowMap.get(value) : null;
+      merchantAssignmentDialog(row ? [row.id] : [...state.selected], row);
     } else if (action === "bulk" || action === "bulk-trip") {
       const selected = [...state.selected];
       if (action === "bulk" && new Set(selected.map(id => currentRowMap.get(id).amount < 0)).size > 1) {
@@ -1489,11 +1697,6 @@ main.addEventListener("change", event => {
 });
 
 main.addEventListener("input", event => {
-  if (event.target.id === "category-query" && currentCategoryContext) {
-    currentCategoryContext.chat.draft = event.target.value;
-    $("#category-chat-send").disabled = !event.target.value.trim();
-    return;
-  }
   if (event.target.id !== "tx-search") return;
   state.search = event.target.value;
   state.page = 1;
@@ -1506,32 +1709,45 @@ main.addEventListener("input", event => {
   }
 });
 
-main.addEventListener("click", event => {
-  if (!currentCategoryContext) return;
-  const {chat} = currentCategoryContext;
-  if (event.target.closest("[data-chat-toggle]")) {
+document.addEventListener("input", event => {
+  if (!event.target.matches("[data-chat-input]")) return;
+  const root = event.target.closest("[data-codex-chat]");
+  const {chat} = chatFor(root);
+  chat.draft = event.target.value;
+  $("[data-chat-send]", root).disabled = !chat.draft.trim();
+});
+
+document.addEventListener("click", event => {
+  const root = event.target.closest("[data-codex-chat]");
+  if (!root) return;
+  const context = chatFor(root);
+  const {chat} = context;
+  if (event.target.closest("[data-chat-close]")) {
+    dashboardAssistant.close();
+  } else if (event.target.closest("[data-chat-toggle]")) {
     chat.collapsed = !chat.collapsed;
-    updateCategoryChat("category-chat-toggle");
+    renderChat(root, context, "[data-chat-toggle]");
   } else if (event.target.closest("[data-chat-clear]") && !chat.pending) {
     chat.messages = [];
     chat.error = "";
     chat.draft = "";
-    updateCategoryChat("category-query");
+    renderChat(root, context, "[data-chat-input]");
   }
 });
 
-main.addEventListener("keydown", event => {
-  if (event.target.id === "category-query" && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+document.addEventListener("keydown", event => {
+  if (event.target.matches?.("[data-chat-input]") && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     event.target.form.requestSubmit();
   }
 });
 
-main.addEventListener("submit", async event => {
-  if (event.target.id !== "category-question" || !currentCategoryContext) return;
+document.addEventListener("submit", async event => {
+  if (!event.target.matches("[data-chat-form]")) return;
+  const root = event.target.closest("[data-codex-chat]");
   event.preventDefault();
-  const {category, subcategory, year, currency, chat} = currentCategoryContext;
-  const question = $("#category-query", event.target).value.trim();
+  const {category, subcategory, year, currency, tripId, chat} = chatFor(root);
+  const question = $("[data-chat-input]", root).value.trim();
   if (!question || chat.pending) return;
   const history = chat.messages.slice(-8).map(({role, text}) => ({role, text: text.slice(0, 6000)}));
   const userMessage = {role: "user", text: question};
@@ -1539,18 +1755,19 @@ main.addEventListener("submit", async event => {
   chat.draft = "";
   chat.error = "";
   chat.pending = true;
-  updateChatTurn(chat, userMessage);
+  updateChatTurn(root, chat, userMessage);
   try {
-    const {reply, updated} = await request("/api/category-chat", {category, subcategory, year, currency, question, history});
+    const {reply, updated} = await request("/api/category-chat", {category, subcategory, year, currency, trip_id: tripId, question, history});
     const message = {role: "assistant", text: reply};
     chat.messages.push(message);
     chat.pending = false;
-    updateChatTurn(chat, message);
+    updateChatTurn(root, chat, message);
     if (updated) {
       try {
         await refresh();
-        if (currentCategoryContext?.chat === chat) {
-          const transcript = $(".category-chat-log");
+        const activeRoot = root === dashboardAssistant ? root : $("#category-assistant");
+        if (activeRoot && chatFor(activeRoot)?.chat === chat) {
+          const transcript = $(".category-chat-log", activeRoot);
           transcript.scrollTop = transcript.scrollHeight;
         }
         toast("Ledger updated.");
@@ -1563,7 +1780,7 @@ main.addEventListener("submit", async event => {
     chat.draft = question;
     chat.error = error.message;
     chat.pending = false;
-    updateChatTurn(chat, null, true);
+    updateChatTurn(root, chat, null, true);
   }
 });
 

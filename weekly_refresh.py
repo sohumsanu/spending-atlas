@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
-from ledger import cents, connect, data_view, iso_date
+from ledger import cents, connect, data_view, iso_date, verified_statement_overlap
 
 
 def prepare(folder, destination):
@@ -15,9 +15,14 @@ def prepare(folder, destination):
     if not source:
         raise ValueError("Save the Finances pages before preparing an import.")
     with connect() as db:
-        transactions = {row["id"]: row for row in db.execute("SELECT * FROM tx")}
-        corrected = {row["tx"]: row["upstream_amount"] for row in db.execute("SELECT * FROM statement_amounts")}
-        known = {row["id"]: row for row in db.execute("SELECT * FROM accounts")}
+        db.execute("BEGIN")
+        return prepare_rows(db, source, destination)
+
+
+def prepare_rows(db, source, destination):
+    transactions = {row["id"]: row for row in db.execute("SELECT * FROM tx")}
+    corrected = {row["tx"]: row["upstream_amount"] for row in db.execute("SELECT * FROM statement_amounts")}
+    known = {row["id"]: row for row in db.execute("SELECT * FROM accounts")}
     statement_amounts = defaultdict(list)
     for row in transactions.values():
         if not row["id"].startswith("finances:"):
@@ -74,7 +79,9 @@ def prepare(folder, destination):
                 else:
                     counts["matched"] += 1
                 continue
-            if (not currency or not (row.get("merchant_name") or row.get("name")) or any(
+            verified_overlap = verified_statement_overlap(db, {
+                "account": local_id, "currency": currency, "amount": amount, "date": day})
+            if (not currency or not (row.get("merchant_name") or row.get("name")) or verified_overlap or any(
                 abs((date.fromisoformat(day) - date.fromisoformat(posted)).days) <= 4
                 for posted in statement_amounts[local_id, amount, currency]
             )):

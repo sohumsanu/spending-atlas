@@ -7,10 +7,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from ledger import ROOT, iso_date, normalize, rebuild_trips, setting
 
 SHARE_FILES = (
-    ".gitignore", "README.md", "START-HERE.md", "CODEX_SETUP.md", "bootstrap.py", "Start Spending Atlas.command", "Start Spending Atlas.bat",
-    "app.py", "ledger.py", "intelligence.py", "onboarding.py", "reference.py", "category_chat.py",
+    ".gitignore", "START-HERE.md", "Start Spending Atlas.command", "Start Spending Atlas.bat",
+    "app.py", "ledger.py", "intelligence.py", "onboarding.py", "bank_import.py", "reference.py", "category_chat.py",
     "amazon_orders.py", "amazon_mcp.py", "costco_receipts.py", "weekly_refresh.py",
-    "static/index.html", "static/style.css", "static/app.js",
+    "static/index.html", "static/style.css", "static/app.js", "static/bank-format-example.csv",
     "docs/images/chatgpt-finances.jpg", "docs/images/chatgpt-connect-account.jpg",
     "amazon-chrome/manifest.json", "amazon-chrome/collector.js", "amazon-chrome/panel.html",
     "amazon-chrome/panel.css", "amazon-chrome/panel.js", "amazon-chrome/worker.js",

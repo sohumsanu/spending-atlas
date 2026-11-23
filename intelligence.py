@@ -17,6 +17,21 @@ CATEGORIES = {
     "transfers": "Internal transfers", "card_payments": "Credit-card payments", "credits": "Refunds & reimbursements",
     "other": "Uncategorized", "shared_expenses": "Shared expenses", "returned_payments": "Returned payment attempts",
 }
+# Public merchant evidence, keyed by the exact normalized statement descriptor or merchant.
+MERCHANTS = {
+    "lillie coits": ("dining_drinks", "Lillie Coit’s lists itself as a restaurant.", "https://lilliecoits.com/"),
+    "the bhas lady llc": ("dining_drinks", "Eats Meets West Bowls identifies this as its legal name.", "https://eatsmeetswestbowls.com/terms"),
+    "deer valley signatures": ("shopping", "Deer Valley lists this as a retail store.", "https://shop.deervalley.com/"),
+    "dymk inc": ("shopping", "Public records identify the business as a gift retailer.", "https://www.osha.gov/ords/imis/establishment.inspection_detail?id=1898267.015"),
+    "vir atl": ("travel", "Citi identifies VIR ATL as Virgin Atlantic.", "https://www.citibank.com/tts/solutions/commercial-cards/assets/docs/govt/Merchant-Category-Codes.pdf"),
+    "cot flt": ("travel", "The source identifies the payment as airfare.", ""),
+    "ramus dev via link": ("services", "Ramus identifies the product as a cloud development service.", "https://ramus.dev/docs"),
+    "ad forward banks": ("shopping", "The merchant identifies its Banks Avenue location as a retailer.", "https://avldispensary.com/location/asheville-south-slope/"),
+    "arco": ("transportation", "ARCO identifies its locations as fuel stations; specific items are unavailable.", "https://www.arco.com/"),
+    "viva mexico foods": ("groceries", "The merchant sells food at farmers markets.", "https://www.vivamexicofoods.com/"),
+    "payment to viva mexico foods": ("groceries", "The merchant sells food at farmers markets.", "https://www.vivamexicofoods.com/"),
+}
+
 RULES = (
     ("groceries", r"grocery|supermarket|trader joe|whole foods|safeway|kroger|aldi"),
     ("dining_drinks", r"cafe|coffee|restaurant|pizza|starbucks|doordash|uber eats|taco|ramen"),
@@ -41,7 +56,7 @@ FOOD_MEMO = re.compile(r"\b(food|dinner|dinna|lunch|brunch|breakfast|meal|restau
 GROCERY_MEMO = re.compile(r"\b(grocer(?:y|ies)|farmers market|whole foods|trader joe|supermarket|greens|produce|vegetables|fruit)\b")
 FARM_MERCHANT = re.compile(r"\bfarm(?:s|ers)?\b")
 PEER_NONFOOD = re.compile(r"\b(rent|deposit|housing|landlord|refund|returned|autopay|cash|transfer|gift|gifts|"
-                          r"airbnb|fare|flight|plane|concert|band|parking|gas|car|trip|hotel|"
+                          r"airbnb|fare|flight|plane|concert|band|parking|gas|car|trip|hotel|japan|maine|denmark|"
                           r"loan|repayment|plant\w*|pothos|parcels|bingo|bitcoin|wifi|donation|payroll|test|fee)\b")
 MEDICAL_MERCHANT = re.compile(r"\b(ulo co(?:m)?|ulohos|dermatolog\w*|endocrin\w*|hospital|dentist|dental|sutter health|medical (?:center|group)|physician\w*|pediatric\w*|optometr\w*|psychia\w*|therapist)\b")
 OWN_ACCOUNT_MOVEMENT = re.compile(r"\b(?:transfer|withdrawal|deposit) (?:to|from) (?:360 (?:performance )?|my )?(?:savings|checking|money market|chk)\b")
@@ -93,7 +108,10 @@ def classify(row, saved, account_label="", paired=False, *, owner="", own_labels
     detail = row["source_detail"].casefold()
     confidence = row["source_confidence"].casefold()
     amount = row["amount"]
-    card_payment = re.search(r"payment thank you|autopay payment|credit card payment|online payment thank|online payment from (chk|checking)", description) or "credit_card_payment" in detail
+    card_payment = re.search(
+        r"payment thank you|autopay (payment|pymt)|autopay \w+ auto pmt|credit card payment|"
+        r"online payment thank|online payment from (chk|checking)", description
+    ) or "credit_card_payment" in detail
     if card_payment:
         return "card_payments", "transfer", "The description identifies a credit-card payment.", 0
     own_account = self_transfer(row, account_label, paired, owner, own_labels)
@@ -126,6 +144,10 @@ def classify(row, saved, account_label="", paired=False, *, owner="", own_labels
         return "other", "uncertain", "The debit counts as an outflow. Ownership and spending purpose are unverified.", 1
     if saved:
         return saved, "purchase", "Your saved rule for this merchant.", 0
+    verified = MERCHANTS.get(normalize(row["description"])) or MERCHANTS.get(normalize(row["merchant"]))
+    if verified:
+        verified_category, reason, url = verified
+        return verified_category, "purchase", reason + (" " + url if url else ""), 0
     if category in CATEGORIES and category not in {"other", "credits"} and confidence not in {"low", "unknown"}:
         return category, "purchase", "The source categorized this purchase as " + CATEGORIES[category] + ".", 0
     for key, pattern in RULES:

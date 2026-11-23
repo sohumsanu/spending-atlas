@@ -33,6 +33,7 @@
       <a href="#overview" class="mobile-brand" aria-label="Spending Atlas overview"><span data-icon="atlas"></span><b>Atlas</b></a>
       <div id="breadcrumb">Your finances</div>
       <button id="search-open" class="global-search" type="button"><span data-icon="search"></span><span class="search-label">Find anything</span><kbd>⌘ / Ctrl K</kbd></button>
+      <button id="codex-open" class="btn small topbar-codex" type="button" aria-haspopup="dialog" aria-controls="dashboard-assistant">Ask Codex</button>
       <form id="filters" aria-label="Report filters">
         <label>Currency <select id="currency" aria-label="Currency"></select></label>
         <label>Year <select id="year" aria-label="Year"></select></label>
@@ -42,6 +43,7 @@
     <main id="main" aria-busy="true"><p class="placeholder">Loading your ledger…</p></main>
   </div>
   <dialog id="modal" aria-labelledby="dialog-title"></dialog>
+  <dialog id="dashboard-assistant" data-codex-chat aria-labelledby="dashboard-chat-title"></dialog>
   <dialog id="search-dialog" aria-labelledby="search-title">
     <div class="search-heading"><h2 id="search-title">Find anything</h2><button type="button" class="icon-button" id="search-close" aria-label="Close search" data-icon="close"></button></div>
     <input id="global-query" type="search" aria-label="Search your ledger" placeholder="Merchant, transaction, category or trip" autofocus>

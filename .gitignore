@@ -7,6 +7,7 @@
 *.db
 *.db-*
 *.csv
+!/static/bank-format-example.csv
 *.tsv
 *.qfx
 *.ofx

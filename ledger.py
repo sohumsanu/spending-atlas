@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sqlite3
+import unicodedata
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -12,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from intelligence import (CATEGORIES, FOOD_MEMO, classify, credit_candidates, days, food_peer_default, is_venmo,
-                          meal_match, model_category, normalize, trip_candidates)
+                          meal_match, model_category, normalize, on_location, travel_anchor, trip_candidates)
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("FINANCE_DATA_DIR", ROOT / ".finance-data")).expanduser().resolve()
@@ -50,7 +51,7 @@ CREATE TABLE IF NOT EXISTS shopping_subcategories (
  tx TEXT PRIMARY KEY REFERENCES tx(id), subcategory TEXT NOT NULL, reason TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS transaction_display (
- tx TEXT PRIMARY KEY REFERENCES tx(id), label TEXT, date TEXT
+ tx TEXT PRIMARY KEY REFERENCES tx(id), label TEXT, date TEXT, merchant TEXT
 );
 CREATE TABLE IF NOT EXISTS costco_receipts (
  id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, date TEXT NOT NULL, amount INTEGER NOT NULL,
@@ -100,6 +101,12 @@ CREATE TABLE IF NOT EXISTS credit_assignments (
 CREATE TABLE IF NOT EXISTS trip_suggestions (
  trip INTEGER NOT NULL REFERENCES trips(id), tx TEXT NOT NULL REFERENCES tx(id), PRIMARY KEY(trip, tx)
 );
+CREATE TABLE IF NOT EXISTS trip_date_exclusions (
+ trip INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+ tx TEXT NOT NULL REFERENCES tx(id) ON DELETE CASCADE,
+ PRIMARY KEY(trip, tx)
+);
+CREATE INDEX IF NOT EXISTS trip_date_exclusions_tx ON trip_date_exclusions(tx);
 CREATE TABLE IF NOT EXISTS reference_trips (
  trip INTEGER PRIMARY KEY REFERENCES trips(id), label TEXT NOT NULL UNIQUE, booking INTEGER NOT NULL
 );
@@ -138,6 +145,8 @@ def initialize():
             db.execute("ALTER TABLE amazon_order_payment ADD COLUMN paid_on TEXT NOT NULL DEFAULT ''")
         if not any(col["name"] == "match_basis" for col in db.execute("PRAGMA table_info(amazon_matches)")):
             db.execute("ALTER TABLE amazon_matches ADD COLUMN match_basis TEXT NOT NULL DEFAULT 'card_exact'")
+        if not any(col["name"] == "merchant" for col in db.execute("PRAGMA table_info(transaction_display)")):
+            db.execute("ALTER TABLE transaction_display ADD COLUMN merchant TEXT")
     DB.chmod(0o600)
 
 def now():
@@ -251,10 +260,26 @@ def inferred_category(db, row, use_model, counterpart=""):
     )] if row["merchant"] else []
     return model_category(row, result, history)
 
-def import_transactions(accounts, records, use_model=True):
+def verified_statement_overlap(db, row):
+    return db.execute("""SELECT 1 FROM tx t LEFT JOIN transaction_context c ON c.tx=t.id
+        LEFT JOIN statement_amounts s ON s.tx=t.id
+        LEFT JOIN statement_descriptions d ON d.tx=t.id
+        LEFT JOIN transaction_display v ON v.tx=t.id
+        WHERE t.account=? AND t.currency=? AND (t.amount=? OR s.upstream_amount=?)
+        AND ((t.id LIKE 'statement:%' AND
+              (abs(julianday(t.date)-julianday(?))<=4 OR substr(c.event_at,1,10)=?))
+             OR (s.tx IS NOT NULL AND abs(julianday(t.date)-julianday(?))<=4)
+             OR (d.tx IS NOT NULL AND v.date=?)) LIMIT 1""",
+        (row["account"], row["currency"], row["amount"], row["amount"],
+         row["date"], row["date"], row["date"], row["date"])).fetchone() is not None
+
+
+def import_transactions(accounts, records, use_model=True, *, verify=None):
     prepared = [(raw, normalize_row(raw, raw["account"])) for raw in records]
     changes = Counter()
     with connect(write=True) as db:
+        if verify is not None:
+            verify(db)
         for account, label, source, coverage in accounts:
             db.execute("""INSERT INTO accounts VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 label=excluded.label, fresh=excluded.fresh, coverage=excluded.coverage""",
@@ -262,6 +287,8 @@ def import_transactions(accounts, records, use_model=True):
         for raw, row in prepared:
             identifier = raw["id"]
             existing = db.execute("SELECT * FROM tx WHERE id=?", (identifier,)).fetchone()
+            if not existing and identifier.startswith("finances:") and verified_statement_overlap(db, row):
+                raise ValueError("A new feed transaction may overlap a verified statement entry. Reconcile the two records before importing.")
             statement = existing and db.execute("SELECT * FROM statement_amounts WHERE tx=?", (identifier,)).fetchone()
             if statement and row["amount"] == statement["upstream_amount"]:
                 row["amount"] = statement["posted_amount"]
@@ -315,8 +342,15 @@ def record_context(db, raw):
             ON CONFLICT(tx) DO UPDATE SET event_at=excluded.event_at,counterpart=excluded.counterpart""",
             (raw["id"], event_at[:45], counterpart[:180]))
 
+def in_trip_dates(row, start, end):
+    day = row["travel_date"] or row["reporting_date"] or row["date"]
+    return (not start or start <= day) and (not end or day <= end)
+
+
 def rebuild_trips(db):
-    rows = [dict(row) for row in db.execute("SELECT * FROM tx WHERE kind='purchase' AND amount>0 ORDER BY date")]
+    rows = [dict(row) for row in db.execute("""SELECT tx.*, td.date AS reporting_date FROM tx
+             LEFT JOIN transaction_display td ON td.tx=tx.id WHERE kind='purchase' AND amount>0 ORDER BY tx.date""")]
+    by_id = {row["id"]: row for row in rows}
     candidates = trip_candidates(rows, setting(db, "home"))
     db.execute("DELETE FROM trip_suggestions")
     db.execute("UPDATE tx SET trip=NULL WHERE manual_trip=0 AND trip IN (SELECT id FROM trips WHERE status='automatic')")
@@ -350,7 +384,8 @@ def rebuild_trips(db):
             db.executemany("INSERT OR IGNORE INTO trip_suggestions VALUES(?,?)", ((trip_id, key) for key in candidate["ids"]))
         else:
             db.executemany("UPDATE tx SET trip=? WHERE id=? AND manual_trip=0 AND trip IS NULL",
-                           ((trip_id, key) for key in candidate["ids"]))
+                           ((trip_id, key) for key in candidate["ids"] if status != "confirmed" or
+                            in_trip_dates(by_id[key], matching["start"], matching["end"])))
     stale = [r["id"] for r in db.execute("""SELECT id FROM trips WHERE status IN ('automatic','suggested')
              AND NOT EXISTS (SELECT 1 FROM tx WHERE tx.trip=trips.id)""") if r["id"] not in seen]
     db.executemany("DELETE FROM trips WHERE id=?", ((i,) for i in stale))
@@ -377,14 +412,19 @@ def reclassify_local():
 
 def patch_transaction(db, identifier, data):
     row = require_transaction(db, identifier)
-    if "display_name" in data or "reporting_date" in data:
-        previous = db.execute("SELECT label,date FROM transaction_display WHERE tx=?", (identifier,)).fetchone()
+    if {"display_name", "reporting_date", "assigned_merchant"} & data.keys():
+        previous = db.execute("SELECT label,date,merchant FROM transaction_display WHERE tx=?", (identifier,)).fetchone()
         label = data.get("display_name", previous["label"] if previous else None)
         date = data.get("reporting_date", previous["date"] if previous else None)
+        merchant = data.get("assigned_merchant", previous["merchant"] if previous else None)
         if label is not None and (not isinstance(label, str) or not 1 <= len(label.strip()) <= 150):
             raise ValueError("Enter a transaction name of up to 150 characters.")
-        db.execute("INSERT OR REPLACE INTO transaction_display VALUES (?,?,?)",
-                   (identifier, label.strip() if label else None, iso_date(date) if date is not None else None))
+        if merchant is not None:
+            if not isinstance(merchant, str) or not 1 <= len(merchant.strip()) <= 150:
+                raise ValueError("Enter a merchant name of up to 150 characters.")
+            merchant = " ".join(merchant.split())
+        db.execute("INSERT OR REPLACE INTO transaction_display(tx,label,date,merchant) VALUES (?,?,?,?)",
+                   (identifier, label.strip() if label else None, iso_date(date) if date is not None else None, merchant))
     if "category" in data:
         category = data["category"]
         if not isinstance(category, str) or category not in CATEGORIES:
@@ -400,6 +440,7 @@ def patch_transaction(db, identifier, data):
             db.execute("DELETE FROM credit_assignments WHERE credit=?", (identifier,))
             if kind != "purchase":
                 db.execute("UPDATE tx SET trip=NULL WHERE id=?", (identifier,))
+                db.execute("DELETE FROM trip_date_exclusions WHERE tx=?", (identifier,))
         db.execute("UPDATE tx SET category=?,kind=?,reason='You set this category.',review=0,manual_category=1 WHERE id=?",
                    (category, kind, identifier))
         if data.get("remember") and kind == "purchase":
@@ -419,12 +460,55 @@ def patch_transaction(db, identifier, data):
             not db.execute("SELECT 1 FROM trips WHERE id=? AND status IN ('automatic','confirmed')", (trip,)).fetchone()):
             raise ValueError("Choose an active trip and a purchase.")
         db.execute("UPDATE tx SET trip=?,manual_trip=1 WHERE id=?", (trip, identifier))
+        db.execute("DELETE FROM trip_date_exclusions WHERE tx=?", (identifier,))
 
 def require_transaction(db, identifier):
     row = db.execute("SELECT * FROM tx WHERE id=?", (identifier,)).fetchone()
     if row is None:
         raise ValueError("Transaction was not found.")
     return row
+
+
+def reconcile_trip_dates(db, trip_id, name, destination, start, end):
+    def location_text(value):
+        return normalize("".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c)))
+
+    places = f" {location_text(name + ' ' + destination)} "
+    rows = db.execute("""SELECT tx.*, td.date AS reporting_date,
+                        EXISTS(SELECT 1 FROM trip_date_exclusions e WHERE e.tx=tx.id AND e.trip=?) AS was_on_trip,
+                        EXISTS(SELECT 1 FROM trip_date_exclusions e WHERE e.tx=tx.id) AS removed_by_dates,
+                        EXISTS(SELECT 1 FROM trip_suggestions s WHERE s.tx=tx.id AND s.trip=?) AS suggested
+                        FROM tx LEFT JOIN transaction_display td ON td.tx=tx.id
+                        WHERE tx.kind='purchase' AND tx.amount>0 AND (tx.trip=? OR tx.trip IS NULL)""",
+                      (trip_id, trip_id, trip_id)).fetchall()
+    removed, added = [], []
+    for row in rows:
+        identifier = row["id"]
+        if not in_trip_dates(row, start, end):
+            if row["trip"] == trip_id:
+                removed.append(identifier)
+            continue
+        if row["trip"] == trip_id:
+            continue
+        if row["was_on_trip"]:
+            added.append(identifier)
+            continue
+        if (row["manual_trip"] and not row["removed_by_dates"]) or not (start and end):
+            continue
+        city = location_text(row["city"])
+        location_match = city and f" {city} " in places and (
+            on_location(row) or (row["travel_date"] and travel_anchor(row)))
+        if row["category"] not in {"housing", "shared_expenses"} and (row["suggested"] or location_match):
+            added.append(identifier)
+
+    db.executemany("INSERT OR IGNORE INTO trip_date_exclusions VALUES(?,?)",
+                   ((trip_id, identifier) for identifier in removed))
+    db.executemany("UPDATE tx SET trip=NULL,manual_trip=1 WHERE id=?", ((identifier,) for identifier in removed))
+    db.executemany("UPDATE tx SET trip=?,manual_trip=1 WHERE id=?", ((trip_id, identifier) for identifier in added))
+    db.executemany("DELETE FROM trip_date_exclusions WHERE trip=? AND tx=?",
+                   ((trip_id, identifier) for identifier in added))
+    db.execute("DELETE FROM trip_suggestions WHERE trip=?", (trip_id,))
+    return {"added": len(added), "removed": len(removed)}
 
 def manage_trip(db, data):
     trip_id = data.get("id")
@@ -438,6 +522,7 @@ def manage_trip(db, data):
     if action == "dismiss" and old:
         db.execute("UPDATE trips SET status='dismissed' WHERE id=?", (trip_id,))
         db.execute("UPDATE tx SET trip=NULL,manual_trip=1 WHERE trip=?", (trip_id,))
+        db.execute("DELETE FROM trip_date_exclusions WHERE trip=?", (trip_id,))
         return
     if action == "merge" and old:
         target = data.get("target")
@@ -446,6 +531,7 @@ def manage_trip(db, data):
             raise ValueError("Choose a different active trip.")
         db.execute("UPDATE tx SET trip=?,manual_trip=1 WHERE trip=?", (target, trip_id))
         db.execute("UPDATE trips SET status='dismissed' WHERE id=?", (trip_id,))
+        db.execute("DELETE FROM trip_date_exclusions WHERE trip=?", (trip_id,))
         db.execute("UPDATE trips SET status='confirmed', start=?, end=? WHERE id=?",
                    (min(old["start"], other["start"]), max(old["end"], other["end"]), target))
         return
@@ -476,6 +562,8 @@ def manage_trip(db, data):
         promoted = db.execute("UPDATE reference_trips SET booking=0 WHERE trip=? AND booking=1", (trip_id,))
         if promoted.rowcount:
             db.execute("UPDATE trips SET reason='You named and confirmed this trip.' WHERE id=?", (trip_id,))
+    if (start, end) != (old["start"], old["end"]):
+        return reconcile_trip_dates(db, trip_id, name, destination, start, end)
     db.execute("""UPDATE tx SET trip=? WHERE id IN (SELECT tx FROM trip_suggestions WHERE trip=?)
                AND trip IS NULL AND manual_trip=0 AND kind='purchase'""", (trip_id, trip_id))
 
@@ -652,9 +740,11 @@ def data_view(db):
             row["matches"] = (credit_candidates(row, purchase_rows)
                               if not row["dismissed"] and row["remaining"] > 0 and
                               (not row["assignment"] or row["assignment"]["treatment"] != "exclude") else [])
-    display = {row["tx"]: row for row in db.execute("SELECT * FROM transaction_display")}
+    display = {row["tx"]: dict(row) for row in db.execute("SELECT * FROM transaction_display")}
     for row in rows:
         if override := display.get(row["id"]):
+            if override.get("merchant"):
+                row["assigned_merchant"] = override["merchant"]
             if override["label"]:
                 row["posted_merchant"] = row["merchant"] or row["description"]
                 row["merchant"] = override["label"]

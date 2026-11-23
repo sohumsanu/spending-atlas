@@ -1,5 +1,6 @@
 """Run the private, loopback-only Spending Atlas web app."""
 import argparse
+import errno
 import json
 import mimetypes
 import os
@@ -22,6 +23,7 @@ from amazon_orders import (browser_bridge, browser_orders, browser_status, read_
 from costco_receipts import receipt_file
 from category_chat import ChatError, answer_category
 from onboarding import export_starter, save_setup, setup_view
+from bank_import import handle as handle_bank_import
 
 STATIC = {"/": "index.html", "/style.css": "style.css", "/app.js": "app.js"}
 EXTENSION_ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
@@ -92,6 +94,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(200, data)
         if path == "/download/starter":
             return self.response(200, export_starter(), "application/zip", "Spending-Atlas-Starter.zip")
+        if path == "/download/bank-csv-example":
+            return self.response(200, (ROOT / "static" / "bank-format-example.csv").read_bytes(),
+                                 "text/csv; charset=utf-8", "Spending-Atlas-CSV-example.csv")
         if path.startswith("/api/costco-receipt/"):
             file = receipt_file(path.removeprefix("/api/costco-receipt/"))
             if file is not None:
@@ -148,9 +153,12 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Choose a CSV and enter its account name.")
                 accounts, records = csv_payload(content, account, data.get("convention"))
                 return self.json(200, import_transactions(accounts, records))
+            if path == "/api/bank-import":
+                return self.json(200, handle_bank_import(data))
             if path == "/api/backup":
                 filename = "spending-atlas-" + now()[:10] + ".sqlite3"
                 return self.response(200, backup_bytes(), "application/vnd.sqlite3", filename)
+            response = {"ok": True}
             with connect(write=True) as db:
                 if path == "/api/edit":
                     ids = data.get("ids")
@@ -161,7 +169,9 @@ class Handler(BaseHTTPRequestHandler):
                     if "category" in data:
                         rebuild_trips(db)
                 elif path == "/api/trip":
-                    manage_trip(db, data)
+                    reconciliation = manage_trip(db, data)
+                    if reconciliation is not None:
+                        response["reconciliation"] = reconciliation
                 elif path == "/api/credit":
                     allocate(db, data)
                 elif path == "/api/setup":
@@ -172,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
                     rebuild_trips(db)
                 else:
                     return self.json(404, {"error": "Action not found."})
-            return self.json(200, {"ok": True})
+            return self.json(200, response)
         except ChatError as error:
             return self.json(error.status, {"error": str(error)})
         except (ValueError, TypeError, OverflowError, sqlite3.IntegrityError) as error:
@@ -193,7 +203,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command")
     serve = commands.add_parser("serve")
-    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--port", type=int, help="Local port. Defaults to 8765.")
     serve.add_argument("--open", action="store_true", help="Open Spending Atlas in your default browser.")
     export = commands.add_parser("export-starter", help="Export the app without your private ledger or settings.")
     export.add_argument("path", type=Path)
@@ -257,8 +267,14 @@ def main():
             raise
         print(f"Saved {args.path}")
     else:
-        port = getattr(args, "port", 8765)
-        with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
+        port = getattr(args, "port", None)
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", 8765 if port is None else port), Handler)
+        except OSError as error:
+            if port is not None or not getattr(args, "open", False) or error.errno != errno.EADDRINUSE:
+                raise
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        with server:
             print(f"Spending Atlas is running at http://127.0.0.1:{server.server_port}", flush=True)
             if args.open:
                 webbrowser.open(f"http://127.0.0.1:{server.server_port}")
