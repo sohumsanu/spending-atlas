@@ -92,6 +92,8 @@ async function request(path, value) {
 
 async function refresh() {
   state.data = await request("/api/data");
+  state.data.transfer_categories ??= ["transfers", "card_payments"];
+  state.data.unverified_categories ??= [];
   if (!location.hash && !state.data.setup.done && !state.data.accounts.length) {
     history.replaceState(null, "", "#setup");
   }
@@ -267,7 +269,8 @@ function overview() {
   const purchases = spendingRows(reporting);
   const postedDebits = sum(reporting.filter(row => row.amount > 0), "amount");
   const excluded = sum(reporting.filter(row => row.amount > 0 && row.kind === "transfer"), "amount");
-  const uncategorizedDebits = sum(reporting.filter(row => row.amount > 0 && row.kind === "uncertain"), "amount");
+  const unverifiedDebits = sum(reporting.filter(row => row.amount > 0 && row.kind === "uncertain"), "amount");
+  const studentLoanPayments = sum(purchases.filter(row => row.category === "student_loan_payments"), "amount");
   const year = state.year;
   const ytd = year === String(new Date().getFullYear());
   const latest = reporting.map(row => row.date).sort().at(-1);
@@ -276,8 +279,9 @@ function overview() {
     `<div class="overview-grid overview-report">${panel("Spending over time", monthlyChart(monthlyTotals(purchases)), "Select a month to see its transactions.", chartControl())}
     ${panel("Where it went", categoryMix(purchases), "Share of categories with positive net spending", '<a class="quiet-link" href="#categories">All categories</a>')}</div>
     <details class="panel gross-detail"><summary>How gross outflows add up</summary><div class="list-row"><span>All posted debits</span><strong class="numeric">${fmt(postedDebits)}</strong></div>
-    <div class="list-row"><span>Own-account transfers and card payments excluded</span><strong class="numeric">${fmt(excluded)}</strong></div>
-    <div class="list-row"><span>Unclassified debits included</span><strong class="numeric">${fmt(uncategorizedDebits)}</strong></div></details>`;
+    <div class="list-row"><span>Money movements excluded</span><strong class="numeric">${fmt(excluded)}</strong></div>
+    ${studentLoanPayments ? `<div class="list-row"><span>Student loan payments included</span><strong class="numeric">${fmt(studentLoanPayments)}</strong></div>` : ""}
+    <div class="list-row"><span>Unverified outflows included</span><strong class="numeric">${fmt(unverifiedDebits)}</strong></div></details>`;
 }
 
 function loadMonthReport() {
@@ -583,7 +587,7 @@ function categoriesPage(key) {
   const rowsForYear = reportRows();
   const transfers = rowsForYear.filter(row => row.kind === "transfer");
   const purchases = spendingRows(rowsForYear);
-  if (["transfers", "card_payments"].includes(key)) {
+  if (state.data.transfer_categories.includes(key)) {
     const rows = transfers.filter(row => row.category === key);
     return '<a class="back" href="#categories">All categories</a>' +
       heading(category(key), "Money movements excluded from spending totals.", "", state.year) +
@@ -616,7 +620,7 @@ function categoriesPage(key) {
   const rows = groups.map(group => `<tr><td><a class="text-button" href="#categories/${encodeURIComponent(group.key)}">${esc(category(group.key))}</a></td>
     <td class="num numeric">${fmt(group.gross)}</td><td class="num numeric">${fmt(group.credits)}</td><td class="num numeric"><strong>${fmt(group.total)}</strong></td>
     <td class="num numeric">${group.total > 0 ? shareLabel.format(group.total / positiveTotal) : "—"}</td></tr>`).join("");
-  const excluded = ["transfers", "card_payments"].map(key => {
+  const excluded = state.data.transfer_categories.map(key => {
     const count = transfers.filter(row => row.category === key).length;
     return `<a class="tile" href="#categories/${key}"><h2>${esc(category(key))}</h2><p class="muted">${count} posted entries</p></a>`;
   }).join("");
@@ -1228,7 +1232,8 @@ function openSearch() {
 }
 
 function categoryOptions(amount, selected) {
-  const allowed = amount < 0 ? ["credits", "income", "transfers", "card_payments"] : Object.keys(state.data.categories).filter(key => !["income", "credits"].includes(key));
+  const allowed = amount < 0 ? ["credits", "income", ...state.data.transfer_categories] :
+    Object.keys(state.data.categories).filter(key => !["income", "credits"].includes(key));
   return allowed.map(key => `<option value="${esc(key)}" ${key === selected ? "selected" : ""}>${esc(category(key))}</option>`).join("");
 }
 
@@ -1377,14 +1382,16 @@ function creditAssignmentDialog(row) {
   if (!row) return;
   const selected = row.assignment?.treatment === "apply" ? row.assignment.category :
     creditStatus(row)[1] === "excluded" ? "exclude" : "unassigned";
-  const options = Object.entries(state.data.categories).filter(([key]) => !["income", "credits", "transfers", "card_payments"].includes(key))
+  const nonExpenses = ["income", "credits", ...state.data.transfer_categories, ...state.data.unverified_categories];
+  const options = Object.entries(state.data.categories).filter(([key]) => !nonExpenses.includes(key))
     .map(([key, label]) => `<option value="${esc(key)}" ${key === selected ? "selected" : ""}>${esc(label)}</option>`).join("");
+  const transferOptions = state.data.transfer_categories.map(key => `<option value="${esc(key)}">${esc(category(key))}</option>`).join("");
   const note = row.links.length ? "Changing the category replaces the current purchase links with a category credit dated when this receipt posted." :
     "The credit will reduce spending in the selected category on the date received.";
   openDialog("Reassign reimbursement", `<p class="section-note">${esc(merchant(row))} · ${fmt(-row.amount, row.currency)}</p>
     <div class="fields"><label>Category or treatment<select name="category">
     <option value="unassigned" ${selected === "unassigned" ? "selected" : ""}>Unassigned</option>
-    <option value="exclude" ${selected === "exclude" ? "selected" : ""}>Exclude from spending</option>\n    <option value="transfers">Internal transfers</option><option value="card_payments">Credit-card payments</option>${options}</select></label>
+    <option value="exclude" ${selected === "exclude" ? "selected" : ""}>Exclude from spending</option>${transferOptions}${options}</select></label>
     <p class="section-note">${esc(note)}</p></div>`,
     async form => save("/api/credit", {credit: row.id, action: "assign", category: form.get("category")}, "Reimbursement assignment saved."));
 }

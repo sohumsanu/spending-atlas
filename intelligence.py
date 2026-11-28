@@ -14,9 +14,21 @@ CATEGORIES = {
     "health_wellness": "Shopping / Health & wellness", "medical": "Medical", "financial": "Fees & financial",
     "gifts_donations": "Gifts & donations", "pets": "Pets", "family_kids": "Family & kids",
     "services": "Services", "education": "Education", "income": "Income",
+    "student_loan_payments": "Student loan payments", "software_cloud": "Software & cloud",
+    "taxes_government": "Taxes & government fees",
     "transfers": "Internal transfers", "card_payments": "Credit-card payments", "credits": "Refunds & reimbursements",
+    "peer_payments": "Peer & wallet payments", "cash_withdrawals": "Cash withdrawals",
     "other": "Uncategorized", "shared_expenses": "Shared expenses", "returned_payments": "Returned payment attempts",
 }
+TRANSFER_CATEGORIES = ("transfers", "card_payments", "returned_payments")
+UNVERIFIED_CATEGORIES = ("peer_payments", "cash_withdrawals")
+NON_EXPENSE_CATEGORIES = {"income", "credits", *TRANSFER_CATEGORIES, *UNVERIFIED_CATEGORIES}
+
+SOFTWARE_CLOUD = re.compile(
+    r"\b(?:ovh us|anthropic|claude ai subscription|openai|openrouter|amazon web services|"
+    r"google cloud|google chatgpt|cloudflare|fly io|heroku|planetscale|vercel|name cheap|"
+    r"sqsp domain|github|hetzner|latitude sh|diffui|cursor ai powered ide|ramus dev)\b"
+)
 # Public merchant evidence, keyed by the exact normalized statement descriptor or merchant.
 MERCHANTS = {
     "lillie coits": ("dining_drinks", "Lillie Coit’s lists itself as a restaurant.", "https://lilliecoits.com/"),
@@ -51,6 +63,21 @@ attribution and trip decisions are handled separately using ledger evidence."""
 
 def normalize(value):
     return " ".join(re.findall(r"[\w]+", str(value or "").casefold()))
+
+
+def specific_expense_category(description, detail):
+    if detail == "education_student_loans" or re.search(
+        r"\b(?:dept education student ln|(?:u s )?department of education student loan payment)\b", description
+    ):
+        return "student_loan_payments", "The transaction identifies a student loan payment."
+    if detail == "financial_government_fees" or re.search(
+        r"\b(?:irs usataxpymt|wa state dol wa st dmv|texas department of public safety)\b", description
+    ):
+        return "taxes_government", "The transaction identifies a tax payment or government agency fee."
+    if SOFTWARE_CLOUD.search(description):
+        return "software_cloud", "The transaction identifies a software or cloud service."
+    return None
+
 
 FOOD_MEMO = re.compile(r"\b(food|dinner|dinna|lunch|brunch|breakfast|meal|restaurant|(?:hot\s?pot)|charcuterie|charc|pizza|sushi|tacos?|boba|coffee|drinks?)\b")
 GROCERY_MEMO = re.compile(r"\b(grocer(?:y|ies)|farmers market|whole foods|trader joe|supermarket|greens|produce|vegetables|fruit)\b")
@@ -94,6 +121,8 @@ def self_transfer(row, account_label="", paired=False, owner="", own_labels=()):
     if is_venmo(row, account_label) and normalize(row["description"]) in {"instant transfer", "standard transfer"}:
         if "venmo" in account_label.casefold():
             return "Venmo identifies a balance transfer between your own accounts."
+    if row["amount"] < 0 and normalize(row["description"]) == "deposit from venmo cashout":
+        return "The bank identifies a cashout from your Venmo balance."
     if "acctverify" in description and "capital one" in description:
         return "Capital One identifies an account-verification movement."
     if OWN_ACCOUNT_MOVEMENT.search(description) and (row["linked_transfer"] or "360" in description) and (
@@ -112,8 +141,14 @@ def classify(row, saved, account_label="", paired=False, *, owner="", own_labels
         r"payment thank you|autopay (payment|pymt)|autopay \w+ auto pmt|credit card payment|"
         r"online payment thank|online payment from (chk|checking)", description
     ) or "credit_card_payment" in detail
-    if card_payment:
+    robinhood_card_payment = (
+        amount < 0 and re.fullmatch(r"robinhood (?:credit|gold) card(?: \d{4})?", normalize(account_label))
+        and normalize(row["merchant"]) == normalize(row["description"]) == "payment"
+    )
+    if card_payment or robinhood_card_payment:
         return "card_payments", "transfer", "The description identifies a credit-card payment.", 0
+    if category == "returned_payments":
+        return "returned_payments", "transfer", "The source identifies a returned payment attempt.", 0
     own_account = self_transfer(row, account_label, paired, owner, own_labels)
     if own_account:
         return "transfers", "transfer", own_account, 0
@@ -138,12 +173,19 @@ def classify(row, saved, account_label="", paired=False, *, owner="", own_labels
         food = food_peer_default(row, account_label)
         if food:
             return food, "purchase", "Your default for ordinary Venmo or Zelle payments without a specific memo.", 0
-    if re.search(r"cash withdrawal|atm withdrawal|atm cash|cash advance", description):
-        return "other", "uncertain", "Cash left the account. The eventual use is unknown.", 1
-    if category in {"transfers", "income"} or (category in {"other", ""} and re.search(r"transfer|venmo|zelle", description)):
+    if category == "cash_withdrawals" or re.search(r"cash withdrawal|atm withdrawal|atm cash|cash advance", description):
+        return "cash_withdrawals", "uncertain", "Cash left the account. The eventual use is unknown.", 1
+    if category == "peer_payments" or (
+        category in {"", "other", "transfers"} and re.search(r"\b(?:venmo|zelle)\b", description)
+    ):
+        return "peer_payments", "uncertain", "The payment channel is known. The spending purpose needs review.", 1
+    if category in {"transfers", "income"} or (category in {"other", ""} and re.search(r"\btransfer\b", description)):
         return "other", "uncertain", "The debit counts as an outflow. Ownership and spending purpose are unverified.", 1
     if saved:
         return saved, "purchase", "Your saved rule for this merchant.", 0
+    if specific := specific_expense_category(description, detail):
+        identified, reason = specific
+        return identified, "purchase", reason, 0
     verified = MERCHANTS.get(normalize(row["description"])) or MERCHANTS.get(normalize(row["merchant"]))
     if verified:
         verified_category, reason, url = verified
@@ -161,7 +203,7 @@ def model_category(row, fallback, history):
     model = os.environ.get("FINANCE_OLLAMA_MODEL")
     if not model or fallback[1] != "purchase" or fallback[2].startswith("Your saved rule"):
         return fallback
-    categories = {k: v for k, v in CATEGORIES.items() if k not in {"income", "transfers", "card_payments", "credits"}}
+    categories = {k: v for k, v in CATEGORIES.items() if k not in NON_EXPENSE_CATEGORIES}
     inputs = {key: row[key] for key in ("merchant", "description", "amount", "currency", "source_category", "source_confidence", "city", "region")}
     inputs.update(categories=categories, comparable_confirmed_categories=history, local_result=fallback[0])
     body = {"model": model, "stream": False, "format": "json", "messages": [
