@@ -12,8 +12,9 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from intelligence import (CATEGORIES, FOOD_MEMO, classify, credit_candidates, days, food_peer_default, is_venmo,
-                          meal_match, model_category, normalize, on_location, travel_anchor, trip_candidates)
+from intelligence import (CATEGORIES, FOOD_MEMO, NON_EXPENSE_CATEGORIES, TRANSFER_CATEGORIES, UNVERIFIED_CATEGORIES,
+                          classify, credit_candidates, days, food_peer_default, is_venmo, meal_match, model_category,
+                          normalize, on_location, travel_anchor, trip_candidates)
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("FINANCE_DATA_DIR", ROOT / ".finance-data")).expanduser().resolve()
@@ -114,7 +115,13 @@ CREATE TABLE IF NOT EXISTS reference_trips (
 SOURCE_FIELDS = ("account", "date", "merchant", "description", "amount", "currency", "source_category",
                  "source_detail", "source_confidence", "city", "region", "country", "channel", "memo",
                  "linked_transfer", "travel_date")
-EXPENSE_CATEGORIES = set(CATEGORIES) - {"income", "transfers", "card_payments", "credits"}
+EXPENSE_CATEGORIES = set(CATEGORIES) - NON_EXPENSE_CATEGORIES
+CATEGORY_KINDS = {
+    "income": "income",
+    "credits": "credit",
+    **dict.fromkeys(TRANSFER_CATEGORIES, "transfer"),
+    **dict.fromkeys(UNVERIFIED_CATEGORIES, "uncertain"),
+}
 SHOPPING_SUBCATEGORIES = {
     "home": "Home & household", "electronics": "Electronics", "clothing": "Clothing & accessories",
     "health_wellness": "Health & wellness", "hobbies": "Hobbies & recreation", "gifts": "Gifts",
@@ -410,7 +417,7 @@ def reclassify_local():
         rebuild_trips(db)
         return changed
 
-def patch_transaction(db, identifier, data):
+def patch_transaction(db, identifier, data, *, category_reason="You set this category.", category_needs_review=False):
     row = require_transaction(db, identifier)
     if {"display_name", "reporting_date", "assigned_merchant"} & data.keys():
         previous = db.execute("SELECT label,date,merchant FROM transaction_display WHERE tx=?", (identifier,)).fetchone()
@@ -430,10 +437,10 @@ def patch_transaction(db, identifier, data):
         if not isinstance(category, str) or category not in CATEGORIES:
             raise ValueError("Choose a valid category.")
         amount = row["amount"]
-        allowed = {"income", "credits", "transfers", "card_payments"} if amount < 0 else set(CATEGORIES) - {"income", "credits"}
+        allowed = {"income", "credits", *TRANSFER_CATEGORIES} if amount < 0 else set(CATEGORIES) - {"income", "credits"}
         if category not in allowed:
             raise ValueError("Choose a category consistent with the transaction direction.")
-        kind = {"income": "income", "credits": "credit", "transfers": "transfer", "card_payments": "transfer"}.get(category, "purchase")
+        kind = CATEGORY_KINDS.get(category, "purchase")
         if kind != row["kind"]:
             db.execute("DELETE FROM allocations WHERE credit=? OR purchase=?", (identifier, identifier))
             db.execute("DELETE FROM dismissed_credits WHERE credit=?", (identifier,))
@@ -441,8 +448,8 @@ def patch_transaction(db, identifier, data):
             if kind != "purchase":
                 db.execute("UPDATE tx SET trip=NULL WHERE id=?", (identifier,))
                 db.execute("DELETE FROM trip_date_exclusions WHERE tx=?", (identifier,))
-        db.execute("UPDATE tx SET category=?,kind=?,reason='You set this category.',review=0,manual_category=1 WHERE id=?",
-                   (category, kind, identifier))
+        db.execute("UPDATE tx SET category=?,kind=?,reason=?,review=?,manual_category=1 WHERE id=?",
+                   (category, kind, category_reason, int(category_needs_review or kind == "uncertain"), identifier))
         if data.get("remember") and kind == "purchase":
             merchant = normalize(row["merchant"] or row["description"])
             db.execute("INSERT OR REPLACE INTO rules VALUES(?,?)", (merchant, category))
@@ -574,7 +581,7 @@ def allocate(db, data, *, system=False):
         raise ValueError("The incoming transaction must be a refund or reimbursement.")
     if data.get("action") == "assign":
         category = data.get("category")
-        if category in ("transfers", "card_payments"):
+        if category in TRANSFER_CATEGORIES:
             patch_transaction(db, credit_key, {"category": category})
             save_credit_assignment(db, credit_key, "", "exclude", "manual", "You classified this as a transfer or card payment.")
             return
@@ -652,7 +659,7 @@ def categorize_credits(db):
         matches = credit_candidates(row, purchases)
         exact = [m for m in matches if m["score"] >= 10 and m["amount"] == -row["amount"]
                  and normalize(purchase_lookup[m["id"]]["merchant"] or purchase_lookup[m["id"]]["description"]) == name]
-        transfer_like = category in {"transfers", "income"} or any(token in description for token in
+        transfer_like = category in (*TRANSFER_CATEGORIES, "income") or any(token in description for token in
             ("zelle", "venmo", "cash app", "paypal", "cash reward", "statement credit", "reward redemption", "payroll"))
         if len(name) >= 4 and len(exact) == 1 and not transfer_like:
             match = exact[0]
@@ -754,6 +761,7 @@ def data_view(db):
     if display:
         rows.sort(key=lambda row: row["date"], reverse=True)
     return {"accounts": accounts, "transactions": rows, "trips": trips, "categories": CATEGORIES,
+            "transfer_categories": TRANSFER_CATEGORIES, "unverified_categories": UNVERIFIED_CATEGORIES,
             "shopping_subcategories": SHOPPING_SUBCATEGORIES,
             "amazon_count": len(amazon), "costco_receipts": receipts,
             "home": setting(db, "home"), "model": bool(os.environ.get("FINANCE_OLLAMA_MODEL"))}

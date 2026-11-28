@@ -59,6 +59,10 @@ The Months report compares total spending with three views that exclude student 
 
 Use **Report settings** to add exact merchant names or statement descriptions for rent and student loan payments. These settings are saved in your browser and apply to the Months report.
 
+### Spending and money movements
+
+Atlas can categorize identifiable student loan payments, software and cloud charges, and taxes and government fees. Peer payments and cash withdrawals with an unknown purpose show up in Review and count as outflows. Internal transfers, credit-card payments, and returned payment attempts are listed in Categories and excluded from spending totals.
+
 ### Optional retailer receipts
 
 Open **Setup → Optional receipts**. Turn on Amazon or Costco, use its sign-in link, then copy its Codex prompt. Sign in yourself on the retailer site. Amazon needs the cards you used and its completed payments to separate your purchases on a shared account. Costco warehouse receipts are under **Orders & Returns → In-Warehouse**. Suggestions for other retailers come from repeat shopping and grocery purchases in your ledger. You choose which merchant to investigate. [Costco receipt guide](https://customerservice.costco.com/app/answers/detail/a_id/10306)

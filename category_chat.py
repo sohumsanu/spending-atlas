@@ -9,13 +9,12 @@ import threading
 from pathlib import Path
 from decimal import Decimal
 
-from ledger import (CATEGORIES, SHOPPING_SUBCATEGORIES, allocate, connect, data_view, manage_trip,
+from ledger import (CATEGORIES, SHOPPING_SUBCATEGORIES, TRANSFER_CATEGORIES, allocate, connect, data_view, manage_trip,
                     patch_transaction, rebuild_trips, save_credit_assignment)
 
 CHAT_SLOT = threading.BoundedSemaphore()
 CODEX_APP_BIN = Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
 SHOPPING = {"shopping", "health_wellness"}
-TRANSFERS = {"transfers", "card_payments"}
 
 
 class ChatError(Exception):
@@ -49,7 +48,7 @@ def view_context(ledger, category, subcategory, year, currency, trip_id=None):
             continue
         direct = row.get("direct_offset", 0)
         group = row["assignment"]["category"] if direct else row["category"]
-        if category in TRANSFERS:
+        if category in TRANSFER_CATEGORIES:
             if row["kind"] != "transfer" or group != category:
                 continue
         elif category and ((row["amount"] <= 0 and not direct) or row["kind"] == "transfer"):
@@ -108,7 +107,7 @@ def view_context(ledger, category, subcategory, year, currency, trip_id=None):
     return {
         "category": CATEGORIES[category] if category else (trips[0]["name"] if trip_id is not None else "Dashboard"),
         "subcategory": SHOPPING_SUBCATEGORIES.get(subcategory) or ("Category-only credits" if subcategory else None),
-        "year": year if trip_id is None else None, "currency": currency, "excluded_from_spending": category in TRANSFERS,
+        "year": year if trip_id is None else None, "currency": currency, "excluded_from_spending": category in TRANSFER_CATEGORIES,
         "gross_outflows": gross, "applied_credits": credits, "net_spending": gross - credits,
         "transactions": rows,
         "related_credits": credits_in_scope,
