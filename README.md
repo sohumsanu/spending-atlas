@@ -49,8 +49,15 @@ In **Setup**, choose the source you want.
 | In the dashboard | What you can do |
 | --- | --- |
 | **Overview** | See yearly and monthly net spending and what drove it. |
+| **Months** | Compare category totals and monthly averages over the past 3, 6, or 12 months. Select a month or category amount to see the transactions. |
 | **Setup → Check coverage** | Confirm the account list, see unverified dates, and get a Codex prompt for those gaps. |
 | **Categories & trips** | Recategorize a purchase, link a refund, or ask Codex to make an edit. |
+
+### Monthly spending
+
+The Months report compares total spending with three views that exclude student loans, rent, or both. Averages use months with recorded activity. You can exclude the current month if you want to compare completed months. Linked refunds and reimbursements reduce spending in the original purchase month. Category-only credits apply in the month received.
+
+Use **Report settings** to add exact merchant names or statement descriptions for rent and student loan payments. These settings are saved in your browser and apply to the Months report.
 
 ### Optional retailer receipts
 

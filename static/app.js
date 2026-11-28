@@ -5,7 +5,15 @@ const main = $("#main");
 const modal = $("#modal");
 const names = {overview: "Overview", transactions: "Transactions", months: "Months", categories: "Categories", merchants: "Merchants", trips: "Trips", reimbursements: "Reimbursements", review: "Review", data: "Data & backup", setup: "Setup"};
 const monthNames = Array.from({length: 12}, (_, i) => new Intl.DateTimeFormat("en", {month: "long", timeZone: "UTC"}).format(new Date(Date.UTC(2020, i))));
-const state = {data: null, year: "", currency: "", selected: new Set(), search: "", page: 1, sorts: new Map(), creditFilter: "all", account: "", chartMode: "breakdown", tripOrder: "date"};
+const monthRanges = [3, 6, 12];
+const monthScenarios = {
+  total: "Total spending",
+  withoutLoans: "Excluding student loans",
+  withoutRent: "Excluding rent",
+  withoutBoth: "Excluding student loans & rent",
+};
+const monthReportKey = "spending-atlas.month-report.v1";
+const state = {data: null, year: "", currency: "", selected: new Set(), search: "", page: 1, sorts: new Map(), creditFilter: "all", account: "", chartMode: "breakdown", tripOrder: "date", monthReport: loadMonthReport()};
 let toastTimer;
 let currentAccountMap = new Map();
 let currentRowMap = new Map();
@@ -17,6 +25,8 @@ const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&": "&amp;
 const fmt = (cents, currency = state.currency) => new Intl.NumberFormat("en-US", {style: "currency", currency: currency || "USD"}).format(cents / 100);
 const labelDate = date => date ? new Intl.DateTimeFormat("en-US", {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"}).format(new Date(`${date.slice(0, 10)}T00:00:00Z`)) : "—";
 const monthKey = (year, i) => `${year}-${String(i + 1).padStart(2, "0")}`;
+const monthName = key => monthNames[Number(key.slice(5)) - 1];
+const monthLabel = key => `${monthName(key).slice(0, 3)} ${key.slice(0, 4)}`;
 const route = () => {
   try { return location.hash.slice(1).split("/").map(part => decodeURIComponent(part)); }
   catch (_) { return ["overview"]; }
@@ -212,8 +222,7 @@ function monthlyTotals(purchases) {
   });
 }
 
-function monthlyChart(months) {
-  const breakdown = state.chartMode === "breakdown";
+function monthlyChart(months, {breakdown = state.chartMode === "breakdown", rolling = false} = {}) {
   const high = Math.max(100, ...months.map(item => breakdown ? item.gross : item.total));
   const low = Math.max(0, ...months.map(item => -item.total));
   const target = Math.max(high, low) / 4;
@@ -225,13 +234,14 @@ function monthlyChart(months) {
   const pct = cents => cents / (divisions * interval) * 100;
   const scale = new Intl.NumberFormat("en", {style: "currency", currency: state.currency, notation: "compact", maximumFractionDigits: 1});
   const ticks = Array.from({length: divisions + 1}, (_, i) => `<span style="top:${i / divisions * 100}%">${scale.format((upper - i) * interval / 100)}</span>`).join("");
-  const bars = months.map(({name, key, rows, gross, credits, total}) => {
-    const label = rows.length ? `${name}: ${fmt(total)} net, ${fmt(gross)} gross, ${fmt(credits)} credited` : `${name}: no recorded spending`;
+  const bars = months.map(({name, key, rows, gross, credits, total, recorded = rows.length > 0}) => {
+    const period = rolling ? monthLabel(key) : name;
+    const label = recorded ? `${period}: ${fmt(total)} net, ${fmt(gross)} gross, ${fmt(credits)} credited` : `${period}: no records`;
     return `<a class="bar-link" href="#months/${key}" aria-label="${esc(label)}" title="${esc(label)}">
       <span class="bar" aria-hidden="true" style="--gross:${pct(breakdown ? gross : 0)}%;--net:${pct(Math.max(0, total))}%;--below:${pct(Math.max(0, -total))}%"><i></i><b></b></span>
-      <span class="bar-month" aria-hidden="true">${name.slice(0, 3)}</span><span class="chart-tip" aria-hidden="true">${fmt(total)} net</span></a>`;
+      <span class="bar-month" aria-hidden="true">${name.slice(0, 3)}</span><span class="chart-tip" aria-hidden="true">${recorded ? `${fmt(total)} net` : "No records"}</span></a>`;
   }).join("");
-  return `<div class="chart-shell" style="--zero:${lower / divisions * 100}%;--chart-step:${100 / divisions}%">
+  return `<div class="chart-shell${rolling ? " rolling-chart" : ""}" style="--zero:${lower / divisions * 100}%;--chart-step:${100 / divisions}%;--month-count:${months.length}">
     <div class="chart-scale" aria-hidden="true">${ticks}</div><div class="chart-plot">${bars}</div></div>
     <div class="legend"><span>Net spending</span>${breakdown ? "<span>refunds/reimbursements</span>" : ""}${low ? '<span class="net-credit">Net credit</span>' : ""}</div>`;
 }
@@ -270,25 +280,143 @@ function overview() {
     <div class="list-row"><span>Unclassified debits included</span><strong class="numeric">${fmt(uncategorizedDebits)}</strong></div></details>`;
 }
 
+function loadMonthReport() {
+  const defaults = {range: 12, includeCurrent: true, scenario: "total", rentLabels: "", loanLabels: ""};
+  try {
+    const prefs = JSON.parse(localStorage.getItem(monthReportKey));
+    if (!prefs || typeof prefs !== "object") return defaults;
+    return {
+      range: monthRanges.includes(prefs.range) ? prefs.range : defaults.range,
+      includeCurrent: typeof prefs.includeCurrent === "boolean" ? prefs.includeCurrent : defaults.includeCurrent,
+      scenario: Object.hasOwn(monthScenarios, prefs.scenario) ? prefs.scenario : defaults.scenario,
+      rentLabels: typeof prefs.rentLabels === "string" ? prefs.rentLabels.slice(0, 1000) : "",
+      loanLabels: typeof prefs.loanLabels === "string" ? prefs.loanLabels.slice(0, 1000) : "",
+    };
+  } catch (_) {
+    return defaults;
+  }
+}
+
+function saveMonthReport(updates) {
+  Object.assign(state.monthReport, updates);
+  try {
+    localStorage.setItem(monthReportKey, JSON.stringify(state.monthReport));
+  } catch (_) {
+    // The report remains usable for this session when browser storage is unavailable.
+  }
+}
+
+function monthReportLabel(value) {
+  return normalizeMerchant(value).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function monthReportLabels(value) {
+  return new Set(value.split("\n").map(monthReportLabel).filter(Boolean));
+}
+
+function monthReportExpenseType(row, rentLabels, loanLabels) {
+  const descriptions = [row.description, row.posted_merchant, row.merchant, row.assigned_merchant].filter(Boolean).map(monthReportLabel);
+  const detail = String(row.source_detail || "").toLowerCase();
+  const words = descriptions.join(" ");
+  if (row.category === "student_loan_payments" || descriptions.some(label => loanLabels.has(label))) return "loans";
+  if (descriptions.some(label => rentLabels.has(label))) return "rent";
+  if (/(?:^|_)student_loans?(?:_|$)/.test(detail) || /\bstudent loans?\b|\bdept education student ln\b/.test(words)) return "loans";
+  if (detail === "housing_rent") return "rent";
+  if (row.category === "housing" && /\brent\b/.test(words) && !/\b(deposit|insurance|late fee)\b/.test(words)) return "rent";
+  return "";
+}
+
+function monthReportData(transactions, today, currency, prefs) {
+  const [year, month] = today.split("-").map(Number);
+  const end = month - (prefs.includeCurrent ? 1 : 2);
+  const keys = Array.from({length: prefs.range}, (_, i) => new Date(Date.UTC(year, end - prefs.range + 1 + i, 1)).toISOString().slice(0, 7));
+  const buckets = new Map(keys.map(key => [key, []]));
+  for (const row of transactions) {
+    if (row.currency === currency && row.date <= today) buckets.get(row.date.slice(0, 7))?.push(row);
+  }
+  const rentLabels = monthReportLabels(prefs.rentLabels);
+  const loanLabels = monthReportLabels(prefs.loanLabels);
+  const months = keys.map(key => {
+    const records = buckets.get(key);
+    const rows = spendingRows(records);
+    const typed = rows.map(row => ({row, type: monthReportExpenseType(row, rentLabels, loanLabels)}));
+    const scenarios = {
+      total: rows,
+      withoutLoans: typed.filter(item => item.type !== "loans").map(item => item.row),
+      withoutRent: typed.filter(item => item.type !== "rent").map(item => item.row),
+      withoutBoth: typed.filter(item => !item.type).map(item => item.row),
+    };
+    const totals = Object.fromEntries(Object.entries(scenarios).map(([id, group]) => [id, amounts(group)]));
+    return {name: monthName(key), key, recorded: records.length > 0, rows, totals,
+      categories: new Map(byCategory(rows).map(group => [group.key, group.total]))};
+  });
+  const recorded = months.filter(month => month.recorded).length;
+  return {months, recorded, categories: byCategory(months.flatMap(month => month.rows))};
+}
+
+function monthReportOptions() {
+  const prefs = state.monthReport;
+  openDialog("Report settings", `<div class="fields">
+    <p class="section-note">Add exact merchant names or statement descriptions to recognize payments the report misses. Enter one per line.</p>
+    <label>Additional rent labels<textarea name="rentLabels" rows="3" maxlength="1000" spellcheck="false">${esc(prefs.rentLabels)}</textarea></label>
+    <label>Additional student loan labels<textarea name="loanLabels" rows="3" maxlength="1000" spellcheck="false">${esc(prefs.loanLabels)}</textarea></label>
+    <small class="muted">Settings are saved in this browser and only affect this report.</small></div>`, form => {
+    const rentLabels = form.get("rentLabels").trim();
+    const loanLabels = form.get("loanLabels").trim();
+    const loans = monthReportLabels(loanLabels);
+    if ([...monthReportLabels(rentLabels)].some(label => loans.has(label))) {
+      throw Error("Use each payment label for either rent or student loans.");
+    }
+    saveMonthReport({rentLabels, loanLabels});
+    render();
+    requestAnimationFrame(() => $("#month-report-settings")?.focus());
+  });
+}
+
 function monthList() {
-  const months = monthlyTotals(spendingRows(reportRows()));
-  const tiles = months.map(({name, key, rows, total, gross, credits}) => {
-    const driver = byCategory(rows).find(group => group.total > 0);
-    return `<a class="month-summary" href="#months/${key}">
-      <div class="month-summary-head"><h3>${name}</h3><strong class="numeric ${total < 0 ? "positive" : ""}">${fmt(total)}</strong></div>
-      ${rows.length ? `<small>${fmt(gross)} gross · ${fmt(credits)} credited</small>
-        ${driver ? `<small>Top category: ${esc(category(driver.key))}</small>` : ""}` : "<small>No recorded spending</small>"}</a>`;
-  }).join("");
-  return heading("Months", "Compare monthly spending and open a month to see what drove it.", "", state.year) +
-    `<div class="stack">${panel("Spending by month", monthlyChart(months), "", chartControl())}${panel("Monthly breakdown", `<div class="month-summary-grid">${tiles}</div>`, "Net spending after refunds and reimbursements.")}</div>`;
+  const prefs = state.monthReport;
+  const today = state.data.setup.today;
+  const {months, recorded, categories} = monthReportData(state.data.transactions, today, state.currency, prefs);
+  const columns = [...months].reverse();
+  const range = `${monthLabel(months[0].key)} – ${monthLabel(months.at(-1).key)}`;
+  const controls = `<div class="month-report-controls">
+    <label>Period <select id="month-report-range">${monthRanges.map(n => `<option value="${n}"${n === prefs.range ? " selected" : ""}>${n} months</option>`).join("")}</select></label>
+    <label class="check"><input id="month-report-current" type="checkbox"${prefs.includeCurrent ? " checked" : ""}> Include month to date</label>
+    <button id="month-report-settings" type="button" class="btn small" data-action="month-report-settings" aria-haspopup="dialog">Report settings</button></div>`;
+  const scenarioControl = `<label class="chart-control"><span class="sr-only">Chart spending view</span><select id="month-report-scenario">
+    ${Object.entries(monthScenarios).map(([id, label]) => `<option value="${id}"${id === prefs.scenario ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></label>`;
+  const moneyCell = (value, href) => {
+    if (value === undefined) return '<td class="num month-report-missing"><span aria-hidden="true">—</span><span class="sr-only">No records</span></td>';
+    const text = fmt(value);
+    const tone = value < 0 ? " positive" : value === 0 && !href ? " muted" : "";
+    return `<td class="num numeric${tone}">${href ? `<a class="text-button" href="${href}">${text}</a>` : text}</td>`;
+  };
+  const headers = columns.map(({key, recorded}) => `<th scope="col" class="num"><a class="text-button" href="#months/${key}">${monthLabel(key)}</a>
+    ${!recorded ? "<small>No records</small>" : key === today.slice(0, 7) ? "<small>To date</small>" : ""}</th>`).join("");
+  const reportRow = (label, values, categoryKey) => {
+    const total = values.reduce((sum, {amount}) => sum + (amount ?? 0), 0);
+    return `<tr><th scope="row">${esc(label)}</th>${moneyCell(total / recorded)}${moneyCell(total)}
+      ${values.map(({key, amount, drilldown}) => moneyCell(amount, categoryKey && drilldown ? `#months/${key}/${encodeURIComponent(categoryKey)}` : "")).join("")}</tr>`;
+  };
+  const summary = Object.entries(monthScenarios).map(([id, label]) => reportRow(label, columns.map(month => ({key: month.key,
+    amount: month.recorded ? month.totals[id].total : undefined})))).join("");
+  const breakdown = categories.map(group => reportRow(category(group.key), columns.map(month => ({key: month.key,
+    amount: month.recorded ? month.categories.get(group.key) ?? 0 : undefined, drilldown: month.categories.has(group.key)})), group.key)).join("");
+  const table = `<div class="table-wrap monthly-report" role="region" aria-label="Monthly spending by category" tabindex="0"><table>
+    <thead><tr><th scope="col">Category</th><th scope="col" class="num">Monthly average</th><th scope="col" class="num">Period total</th>${headers}</tr></thead>
+    <tbody class="monthly-report-totals">${summary}</tbody><tbody>${breakdown}</tbody></table></div>`;
+  const note = `Net of applied refunds and reimbursements. Averages use ${recorded} ${recorded === 1 ? "month" : "months"} with records. Scroll for earlier months.`;
+  const chart = monthlyChart(months.map(month => ({...month, ...month.totals[prefs.scenario]})), {breakdown: false, rolling: true});
+  return heading("Monthly spending", range, '<a class="btn" href="#setup/coverage">Check data coverage</a>') + controls +
+    (recorded ? `<div class="stack">${panel("Spending by category", table, note)}${panel("Spending over time", chart, "", scenarioControl)}</div>` :
+      panel("No records in this period", '<p>Choose a different period or <a class="text-button" href="#setup/start">import transactions</a>.</p>'));
 }
 
 function monthDetail(key) {
-  const [year, month] = key.split("-").map(Number);
-  const current = state.data.transactions.filter(row => row.currency === state.currency && row.date.startsWith(key));
+  const today = state.data.setup.today;
+  const current = state.data.transactions.filter(row => row.currency === state.currency && row.date.startsWith(key) && row.date <= today);
   const purchases = spendingRows(current);
-  const now = new Date();
-  const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1;
+  const isCurrent = key === today.slice(0, 7);
   const received = current.filter(row => row.amount < 0 && ["credit", "income"].includes(row.kind));
   const selected = route()[2];
   const activity = selected ? purchases.filter(row => row.category === selected || (selected === "shopping" && row.category === "health_wellness")) : purchases;
@@ -304,12 +432,12 @@ function monthDetail(key) {
   const actions = `<div class="actions">${button("View transactions", "jump", "spending-activity")}
     ${credits ? button("View refunds/reimbursements", "jump", "spending-credits") : ""}</div>`;
   return '<a class="back" href="#months">All months</a>' +
-    heading(`${monthNames[month - 1]} ${year}`, "See spending, largest purchases, and credits for the month.", actions) + metrics(purchases, isCurrent ? "Month to date" : "") +
+    heading(`${monthName(key)} ${key.slice(0, 4)}`, "See spending, largest purchases, and credits for the month.", actions) + metrics(purchases, isCurrent ? "Month to date" : "") +
     `<div class="stack">${panel("Spending by category", categoryList(purchases, Infinity, group => `#months/${key}/${encodeURIComponent(group)}`), "Select a category to filter the transactions.")}
     ${panel("Largest purchases", `<div class="purchase-strip">${topPurchases(purchases)}</div>`, "Ranked by net cost.")}
     <div id="spending-activity" tabindex="-1">${panel(selected ? category(selected) + " activity" : "Purchases & category credits", transactionTable(activity, true, "spending"),
-      selected ? `${monthNames[month - 1]} ${year} · ${fmt(amounts(activity).total)} net` : "", selected ? `<a class="btn small" href="#months/${key}">Show all</a>` : "")}</div>
-    ${credits ? `<div id="spending-credits" tabindex="-1">${panel("Refunds/reimbursements applied this month", `<div class="month-credit-list">${credits}</div>`, `${fmt(sum(creditEntries, "amount"))} reduced spending in ${monthNames[month - 1]}. Receipt dates may differ.`)}</div>` : ""}
+      selected ? `${monthName(key)} ${key.slice(0, 4)} · ${fmt(amounts(activity).total)} net` : "", selected ? `<a class="btn small" href="#months/${key}">Show all</a>` : "")}</div>
+    ${credits ? `<div id="spending-credits" tabindex="-1">${panel("Refunds/reimbursements applied this month", `<div class="month-credit-list">${credits}</div>`, `${fmt(sum(creditEntries, "amount"))} reduced spending in ${monthName(key)}. Receipt dates may differ.`)}</div>` : ""}
     ${panel("Credits & income received", transactionTable(received, false, "received"), "Shown in the month the money arrived. Credits linked to purchases reduce spending in the original purchase month.")}
     </div>`;
 }
@@ -1014,6 +1142,7 @@ function render() {
   $("#review-count").textContent = count;
   $("#review-count").hidden = !count;
   const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(key || "");
+  $("#year").parentElement.hidden = page === "months" && !validMonth;
   if (page === "months" && validMonth && [...$("#year").options].some(item => item.value === key.slice(0, 4))) {
     state.year = key.slice(0, 4);
     $("#year").value = state.year;
@@ -1603,7 +1732,9 @@ main.addEventListener("click", async event => {
   if (!control) return;
   const {action, value} = control.dataset;
   try {
-    if (action === "sort") {
+    if (action === "month-report-settings") {
+      monthReportOptions();
+    } else if (action === "sort") {
       const [scope, key, direction] = JSON.parse(value);
       state.sorts.set(scope, [key, direction]);
       state.page = 1;
@@ -1680,6 +1811,15 @@ main.addEventListener("click", async event => {
 });
 
 main.addEventListener("change", event => {
+  const {id: controlId, value, checked} = event.target;
+  if (["month-report-range", "month-report-current", "month-report-scenario"].includes(controlId)) {
+    if (controlId === "month-report-range") saveMonthReport({range: Number(value)});
+    if (controlId === "month-report-current") saveMonthReport({includeCurrent: checked});
+    if (controlId === "month-report-scenario") saveMonthReport({scenario: value});
+    render();
+    document.getElementById(controlId)?.focus({preventScroll: true});
+    return;
+  }
   const filterKey = {"credit-filter": "creditFilter", "transaction-account": "account", "chart-mode": "chartMode", "trip-order": "tripOrder"}[event.target.id];
   if (filterKey) {
     state[filterKey] = event.target.value;

@@ -75,11 +75,11 @@ main { max-width: 1510px; margin: 0 auto; padding: 1.8rem clamp(1rem, 3.4vw, 3.2
 .legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .82rem; margin-top: .85rem; color: var(--muted); }
 .legend span::before { display: inline-block; content: ""; width: .65rem; height: .65rem; margin-right: .35rem; background: var(--accent); border-radius: 3px; }
 .legend span:nth-child(2)::before { background: #d1c1fa; }
-.legend .net-credit::before { background: #287969; }
+.legend span.net-credit::before { background: #287969; }
 .chart-shell { --plot-height: clamp(10rem, 23vw, 16rem); display: flex; gap: .55rem; margin-top: 1.35rem; }
 .chart-scale { position: relative; height: var(--plot-height); min-width: 2.7rem; font-size: .73rem; color: var(--muted); text-align: right; }
 .chart-scale span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
-.chart-plot { position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 3px; }
+.chart-plot { position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(var(--month-count, 12), minmax(0, 1fr)); gap: 3px; }
 .chart-plot::before { content: ""; position: absolute; inset: 0 0 auto; height: var(--plot-height); pointer-events: none;
   background: repeating-linear-gradient(to top, #e4eaf0 0 1px, transparent 1px var(--chart-step)); border-top: 1px solid #e4eaf0; }
 .bar-link { position: relative; display: grid; justify-items: center; border-radius: 5px; }
@@ -90,11 +90,29 @@ main { max-width: 1510px; margin: 0 auto; padding: 1.8rem clamp(1rem, 3.4vw, 3.2
 .bar b { bottom: var(--zero); height: var(--net); background: var(--accent); border-radius: 4px 4px 0 0; }
 .bar::after { content: ""; top: calc(100% - var(--zero)); height: var(--below); background: #287969; border-radius: 0 0 4px 4px; }
 .bar-month { padding-top: .4rem; font-size: .72rem; color: var(--muted); }
-.month-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: .65rem; }
-.month-summary { padding: .7rem .8rem; border: 1px solid var(--border); border-radius: .6rem; }
-.month-summary:hover { border-color: #74baad; background: #f7fbfa; }
-.month-summary-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .08rem .45rem; margin-bottom: .18rem; }
-.month-summary small, .trip-timeline small { color: var(--muted); }
+.month-report-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem 1rem; margin-bottom: 1rem; }
+.month-report-controls label { display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .88rem; font-weight: 600; }
+.month-report-controls .check { font-weight: 500; min-height: 2.5rem; cursor: pointer; }
+.month-report-controls input { width: 1rem; height: 1rem; accent-color: var(--accent-dark); }
+.month-report-controls .btn { margin-left: auto; }
+.monthly-report { --category-width: 11rem; position: relative; max-width: 100%; }
+.monthly-report table { min-width: max-content; border-collapse: separate; border-spacing: 0; }
+.monthly-report :is(th, td) { padding: .5rem .68rem; }
+.monthly-report tbody :is(th, td) { border-bottom: 1px solid var(--border); }
+.monthly-report th:first-child { position: sticky; left: 0; z-index: 1; width: var(--category-width); min-width: var(--category-width); max-width: var(--category-width); background: var(--paper); box-shadow: 1px 0 var(--border); overflow-wrap: anywhere; }
+.monthly-report thead th { vertical-align: top; white-space: nowrap; }
+.monthly-report thead small { font-size: .75rem; font-weight: 500; }
+.monthly-report tbody th { color: var(--ink); }
+.monthly-report td { min-width: 6.55rem; }
+.monthly-report td:has(a) { padding: 0; }
+.monthly-report td a { display: block; text-align: right; padding: .5rem .68rem; }
+.monthly-report td a:focus-visible { outline-offset: -3px; }
+.monthly-report td:nth-child(2) { font-weight: 730; }
+.monthly-report-missing { color: var(--muted); }
+.monthly-report-totals, .monthly-report-totals th:first-child { background: var(--canvas); }
+.monthly-report-totals td { font-weight: 630; }
+.monthly-report-totals tr:last-child > * { border-bottom: 2px solid var(--border); }
+.trip-timeline small { color: var(--muted); }
 .trip-timeline-head, .trip-timeline-row { display: grid; grid-template-columns: minmax(12.5rem, 1fr) minmax(0, 1.9fr) minmax(6.75rem, .42fr); align-items: center; gap: 1rem; }
 .trip-timeline-head { font-size: .78rem; color: var(--muted); font-weight: 650; padding: 0 .5rem .4rem; }
 .trip-timeline-head > :last-child, .trip-cost { text-align: right; }
@@ -367,7 +385,7 @@ dialog::backdrop { background: #25203983; }
 .search-result small { color: var(--muted); }
 .search-result:hover, .search-result:focus-visible { background: #f3edfb; }
 .reimbursement-card:hover { background: #f3edfb; }
-.trip-timeline-row:hover, .month-summary:hover, .tile:hover { background: #faf7ff; border-color: #cbb9f1; }
+.trip-timeline-row:hover, .tile:hover { background: #faf7ff; border-color: #cbb9f1; }
 @media (max-width: 1070px) {
   .global-search kbd { display: none; }
 }
@@ -391,6 +409,16 @@ dialog::backdrop { background: #25203983; }
   .metric-icon .icon { width: 15px; height: 15px; }
   .metric-value { font-size: clamp(.98rem, 4.25vw, 1.5rem); }
   .panel { padding: .9rem; }
+  .month-report-controls { gap: .25rem .7rem; }
+  .month-report-controls .btn { margin-left: 0; min-height: 2.5rem; }
+  .month-report-controls select { min-height: 2.5rem; }
+  .monthly-report { --category-width: 8rem; }
+  .monthly-report :is(th, td), .monthly-report td a { padding: .55rem .45rem; }
+  .monthly-report td { min-width: 5.5rem; }
+  .monthly-report thead th:nth-child(2) { width: 5.5rem; white-space: normal; }
+  .panel:has(.rolling-chart) .panel-head { flex-wrap: wrap; }
+  .rolling-chart { gap: .3rem; }
+  .rolling-chart .chart-scale { min-width: 2.3rem; }
   .table-entity .entity-icon { display: none; }
   .chart-tip { display: none !important; }
   .category-report .category-mix { grid-template-columns: 1fr; }
